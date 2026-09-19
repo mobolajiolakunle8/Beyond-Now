@@ -1,0 +1,116 @@
+rules_version = '2';
+
+// BEYOND NOW — Firestore security rules
+// Deploy: firebase deploy --only firestore:rules
+//
+// Identity model:
+//   request.auth.token.isAdmin == true → administrator
+//   Everyone else with request.auth → regular user
+//   Anonymous → public site visitors
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.isAdmin == true;
+    }
+    function isSelf(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // ---------------------------------------------------------
+    // Public CMS content (live website + draft)
+    // ---------------------------------------------------------
+    match /site/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // Media library (image metadata)
+    // ---------------------------------------------------------
+    match /media/{mediaId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // User profiles
+    //  - users may read their own profile
+    //  - admins may read every profile
+    //  - a user can create their own profile (auth-time seed)
+    //  - only the owner can update profile fields (no role/status escalation)
+    //  - admins can update status / role
+    // ---------------------------------------------------------
+    match /users/{uid} {
+      allow read: if isSelf(uid) || isAdmin();
+      allow create: if isSelf(uid)
+        && request.resource.data.role == "user"
+        && request.resource.data.status == "active";
+      // Owners can edit themselves, but can NEVER elevate to admin or change their own status.
+      // Admins can edit anyone (used for status, role).
+      allow update: if isAdmin()
+        || (isSelf(uid)
+            && request.resource.data.role == resource.data.role
+            && request.resource.data.status == resource.data.status);
+      allow delete: if isAdmin();
+
+      // Saved resources under each user
+      match /saved/{itemId} {
+        allow read: if isSelf(uid) || isAdmin();
+        allow write: if isSelf(uid) || isAdmin();
+      }
+
+      // Notifications under each user
+      match /notifications/{itemId} {
+        allow read: if isSelf(uid) || isAdmin();
+        // System writes happen via admin or the user themselves
+        allow create: if isSelf(uid) || isAdmin();
+        allow update: if isSelf(uid) || isAdmin();
+        allow delete: if isSelf(uid) || isAdmin();
+      }
+    }
+
+    // ---------------------------------------------------------
+    // Threads (one per user) and their messages
+    //  - users may only access their own thread
+    //  - admins may read and write any thread
+    // ---------------------------------------------------------
+    match /threads/{threadId} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.userRole == "user";
+      allow update: if isAdmin()
+        || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow delete: if isAdmin();
+
+      match /messages/{msgId} {
+        allow read: if isAdmin()
+          || (isSignedIn() && get(/databases/$(database)/documents/threads/$(threadId)).data.userId == request.auth.uid);
+        // Sender can only create their own messages, role must match
+        allow create: if isAdmin() && request.resource.data.senderRole == "admin"
+          || (isSignedIn()
+              && request.resource.data.senderUid == request.auth.uid
+              && request.resource.data.senderRole == "user");
+        allow update: if isAdmin();
+        allow delete: if isAdmin();
+      }
+    }
+
+    // ---------------------------------------------------------
+    // Admin-only support documents (articles, broadcasts)
+    // ---------------------------------------------------------
+    match /articles/{articleId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /admins/{uid} {
+      allow read: if isSelf(uid) || isAdmin();
+      allow write: if isAdmin();
+    }
+  }
+}
