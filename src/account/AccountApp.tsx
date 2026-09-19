@@ -1,6 +1,5 @@
-import { useEffect, useState } from "react";
-import { useUserStore } from "@/account/UserStore";
-import { SignInScreen, SignUpScreen, ResetPasswordScreen } from "@/account/AuthScreens";
+import { useEffect, useState, type ComponentType } from "react";
+import { ResetPasswordScreen, SignInScreen, SignUpScreen } from "@/account/AuthScreens";
 import {
   DashboardPage,
   MessagesPage,
@@ -11,19 +10,27 @@ import {
   SavedPage,
   SettingsPage,
 } from "@/account/Pages";
-import { AccountLayout, useDocumentTitle } from "@/account/ui";
-import { AdminApp } from "@/admin/AdminApp";
+import { AccountLayout, NAV, useDocumentTitle } from "@/account/ui";
+import { useUserStore } from "@/account/UserStore";
 import { LogoMark } from "@/components/Logo";
 
 const AUTH_ROUTES = new Set(["signin", "signup", "reset"]);
+const PAGES: Record<string, ComponentType> = {
+  dashboard: DashboardPage,
+  profile: ProfilePage,
+  messages: MessagesPage,
+  resources: ResourcesPage,
+  saved: SavedPage,
+  progress: ProgressPage,
+  notifications: NotificationsPage,
+  settings: SettingsPage,
+};
 
-function AuthGate({ route, go }: { route: string; go: (id: string) => void }) {
-  if (route === "signup") return <SignUpScreen go={go} />;
-  if (route === "reset") return <ResetPasswordScreen go={go} />;
-  return <SignInScreen go={go} />;
-}
+const go = (id: string) => {
+  window.location.hash = `#/account/${id}`;
+};
 
-function LoadingSplash({ message }: { message: string }) {
+function Splash({ message }: { message: string }) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-bone">
       <div className="text-center">
@@ -40,125 +47,68 @@ function NotFound() {
       <div className="text-center">
         <LogoMark className="mx-auto h-12 w-12" />
         <h1 className="mt-4 font-display text-2xl font-extrabold text-navy">Page not found</h1>
-        <p className="mt-2 text-charcoal/65">The page you are looking for does not exist.</p>
-        <a
-          href="#home"
-          className="mt-5 inline-block rounded-full bg-navy px-5 py-2.5 font-display text-sm font-semibold text-white hover:bg-navy-soft"
-        >
-          Back to the website
+        <a href="#/account/dashboard" className="mt-5 inline-block rounded-full bg-navy px-5 py-2.5 font-display text-sm font-semibold text-white hover:bg-navy-soft">
+          Back to your dashboard
         </a>
       </div>
     </div>
   );
 }
 
-function SignedInRoutes({ route, go }: { route: string; go: (id: string) => void }) {
-  const { profile, signOutUser } = useUserStore();
-  const display = {
-    name: profile?.name || "Account",
-    email: profile?.email || "",
-    avatarUrl: profile?.avatarUrl || "",
-  };
-
-  if (route === "logout") {
-    void signOutUser();
-    window.location.hash = "#home";
-    return null;
-  }
-
-  useDocumentTitle(`${NAV_LABEL[route] ?? "Account"} · Beyond Now`);
-
-  return (
-    <AccountLayout user={display} route={route} go={go} onSignOut={() => void signOutUser()}>
-      {route === "dashboard" && <DashboardPage />}
-      {route === "profile" && <ProfilePage />}
-      {route === "messages" && <MessagesPage />}
-      {route === "resources" && <ResourcesPage />}
-      {route === "saved" && <SavedPage />}
-      {route === "progress" && <ProgressPage />}
-      {route === "notifications" && <NotificationsPage />}
-      {route === "settings" && <SettingsPage />}
-    </AccountLayout>
-  );
-}
-
-const NAV_LABEL: Record<string, string> = {
-  dashboard: "Dashboard",
-  profile: "My Profile",
-  messages: "Messages",
-  resources: "Resources",
-  saved: "Saved",
-  progress: "Progress",
-  notifications: "Notifications",
-  settings: "Settings",
-};
-
-function SignedOutRouter({ route }: { route: string }) {
-  const { authReady, authedUser } = useUserStore();
-  const go = (id: string) => {
-    window.location.hash = `#/account/${id}`;
-  };
-  void go;
-  if (!authReady) {
-    return <LoadingSplash message="Loading your account…" />;
-  }
-  if (authedUser && !AUTH_ROUTES.has(route)) {
-    // Signed in but landed on a signed-out page: send to dashboard.
-    window.location.hash = "#/account/dashboard";
-    return <LoadingSplash message="Opening your dashboard…" />;
-  }
-  return <AuthGate route={route || "signin"} go={go} />;
-}
-
-function AccountRouter({ route }: { route: string }) {
-  const { authReady, authedUser, profile } = useUserStore();
-  if (!authReady) {
-    return <LoadingSplash message="Loading your account…" />;
-  }
-
-  if (!authedUser) {
-    return <SignedOutRouter route={route} />;
-  }
-
-  // Admin users have a full admin dashboard. Detect on profile.role or claim.
-  const isAdmin = profile?.role === "admin";
-  if (isAdmin && route !== "admin") {
-    // Allow admin to peek at their user account; otherwise route to admin.
-  }
-  if (route === "admin") {
-    return <AdminApp route="overview" />;
-  }
-
-  // If signed in but landed on an auth route, jump to dashboard.
-  if (AUTH_ROUTES.has(route)) {
-    window.location.hash = "#/account/dashboard";
-    return <LoadingSplash message="Opening your dashboard…" />;
-  }
-  if (!NAV_LABEL[route]) return <NotFound />;
-
-  return <SignedInRoutes route={route} go={(id) => (window.location.hash = `#/account/${id}`)} />;
-}
-
-function AccountShell() {
-  const [hash, setHash] = useState<string>(() => (typeof window === "undefined" ? "" : window.location.hash));
+function useHashSegment() {
+  const [hash, setHash] = useState(() => window.location.hash);
   useEffect(() => {
     const onChange = () => setHash(window.location.hash);
     window.addEventListener("hashchange", onChange);
     return () => window.removeEventListener("hashchange", onChange);
   }, []);
-
-  const cleaned = hash.replace(/^#\/account\/?/, "").split("/")[0] ?? "";
-  return <AccountRouter route={cleaned} />;
+  return hash.replace(/^#\/account\/?/, "").split("/")[0] ?? "";
 }
 
-/**
- * The user account shell.
- *
- * `UserStoreProvider` is intentionally NOT mounted here — it is provided once
- * at the application root (see `App.tsx`) so the public navbar and the admin
- * dashboard can also read the signed-in user. Nesting it again here would
- * attach a second set of Firebase auth/profile listeners.
- */
 export function AccountApp() {
-  return <AccountShell />;
+  const route = useHashSegment();
+  const { authReady, authedUser, profile, isAdmin, signOutUser } = useUserStore();
+
+  useDocumentTitle(`${NAV.find((n) => n.id === route)?.label ?? "Account"} · Beyond Now`);
+
+  // Redirects are side effects, not render output.
+  useEffect(() => {
+    if (!authReady) return;
+    if (!authedUser && !AUTH_ROUTES.has(route)) go("signin");
+    if (authedUser && (AUTH_ROUTES.has(route) || route === "")) go("dashboard");
+    if (authedUser && route === "logout") {
+      void signOutUser().then(() => {
+        window.location.hash = "#home";
+      });
+    }
+  }, [authReady, authedUser, route, signOutUser]);
+
+  if (!authReady) return <Splash message="Loading your account…" />;
+
+  if (!authedUser) {
+    if (route === "signup") return <SignUpScreen go={go} />;
+    if (route === "reset") return <ResetPasswordScreen go={go} />;
+    return <SignInScreen go={go} />;
+  }
+
+  if (route === "logout") return <Splash message="Signing you out…" />;
+
+  const Page = PAGES[route];
+  if (!Page) return AUTH_ROUTES.has(route) || route === "" ? <Splash message="Opening your dashboard…" /> : <NotFound />;
+
+  return (
+    <AccountLayout
+      user={{
+        name: profile?.name || authedUser.displayName || "Account",
+        email: profile?.email || authedUser.email || "",
+        avatarUrl: profile?.avatarUrl || "",
+      }}
+      isAdmin={isAdmin}
+      route={route}
+      go={go}
+      onSignOut={() => go("logout")}
+    >
+      <Page />
+    </AccountLayout>
+  );
 }

@@ -19,18 +19,6 @@
   --shadow-lift: 0 24px 60px -28px rgba(11, 45, 91, 0.35);
   --shadow-card: 0 2px 4px -2px rgba(11, 45, 91, 0.08), 0 18px 40px -24px rgba(11, 45, 91, 0.22);
 
-  --animate-sunrise: sunrise 2.4s cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-@keyframes sunrise {
-  from {
-    transform: translateY(26%) scale(0.9);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0) scale(1);
-    opacity: 1;
-  }
 }
 
 @layer base {
@@ -85,16 +73,6 @@
   font-weight: 700;
   letter-spacing: 0.22em;
   text-transform: uppercase;
-}
-
-@utility rule-horizon {
-  background-image: linear-gradient(
-    90deg,
-    transparent 0%,
-    color-mix(in srgb, var(--color-navy) 18%, transparent) 18%,
-    color-mix(in srgb, var(--color-navy) 18%, transparent) 82%,
-    transparent 100%
-  );
 }
 
 /* Scroll reveal */

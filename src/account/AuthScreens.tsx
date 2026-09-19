@@ -1,18 +1,6 @@
 import { useState } from "react";
 import { AcctBtn, AcctField, AcctInput, AuthShell } from "@/account/ui";
 import { signIn, signUp, sendReset } from "@/lib/users";
-import { getFirebase } from "@/lib/firebase";
-
-function GoogleIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4">
-      <path fill="#4285F4" d="M22 12.2c0-.7-.1-1.4-.2-2H12v3.8h5.6c-.2 1.2-.9 2.2-2 2.9v2.4h3.2c1.9-1.7 3.2-4.3 3.2-7.1z" />
-      <path fill="#34A853" d="M12 22c2.7 0 5-1 6.6-2.5l-3.2-2.4c-.9.6-2 1-3.4 1-2.6 0-4.8-1.7-5.6-4.1H3.1v2.5C4.7 19.8 8.1 22 12 22z" />
-      <path fill="#FBBC05" d="M6.4 14a6.1 6.1 0 0 1 0-3.9V7.6H3.1a10 10 0 0 0 0 8.9l3.3-2.5z" />
-      <path fill="#EA4335" d="M12 6c1.5 0 2.8.5 3.8 1.5l2.9-2.9C16.9 3.1 14.7 2.2 12 2.2 8.1 2.2 4.7 4.4 3.1 7.6l3.3 2.5C7.2 7.7 9.4 6 12 6z" />
-    </svg>
-  );
-}
 
 /* ------------------------------- Sign in ------------------------------- */
 
@@ -34,9 +22,6 @@ export function SignInScreen({ go }: { go: (id: string) => void }) {
       setBusy(false);
     }
   };
-
-  const fb = getFirebase();
-  const googleProvider = fb && Boolean((window as unknown as { googleProvider?: unknown }).googleProvider);
 
   return (
     <AuthShell
@@ -76,19 +61,6 @@ export function SignInScreen({ go }: { go: (id: string) => void }) {
         </AcctBtn>
       </form>
 
-      {googleProvider && (
-        <>
-          <div className="my-5 flex items-center gap-3 text-[0.78rem] text-charcoal/45">
-            <span className="h-px flex-1 bg-mist" />
-            or continue with
-            <span className="h-px flex-1 bg-mist" />
-          </div>
-          <AcctBtn variant="outline" size="lg" className="w-full">
-            <GoogleIcon />
-            Google
-          </AcctBtn>
-        </>
-      )}
     </AuthShell>
   );
 }

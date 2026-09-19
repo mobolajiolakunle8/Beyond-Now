@@ -3,13 +3,10 @@ import { About } from "@/components/About";
 import { FinalCTA } from "@/components/FinalCTA";
 import { Footer } from "@/components/Footer";
 import { Hero } from "@/components/Hero";
-import { Impact } from "@/components/Impact";
 import { Method } from "@/components/Method";
 import { Nav } from "@/components/Nav";
 import { Pillars } from "@/components/Pillars";
-import { Resources } from "@/components/Resources";
 import { Stories } from "@/components/Stories";
-
 import { useContent } from "@/lib/store";
 
 /** Applies the SEO fields managed in the dashboard to the live document. */
@@ -33,9 +30,7 @@ function useSeo(enabled: boolean) {
       setMeta('meta[name="description"]', "name", "description", settings.seoDescription);
       setMeta('meta[property="og:description"]', "property", "og:description", settings.seoDescription);
     }
-    if (settings.seoTitle) {
-      setMeta('meta[property="og:title"]', "property", "og:title", settings.seoTitle);
-    }
+    if (settings.seoTitle) setMeta('meta[property="og:title"]', "property", "og:title", settings.seoTitle);
     if (settings.favicon) {
       let icon = document.head.querySelector<HTMLLinkElement>('link[rel="icon"]');
       if (!icon) {
@@ -59,20 +54,15 @@ export function LandingPage({ applySeo = true }: { applySeo?: boolean }) {
       >
         Skip to main content
       </a>
-
       <Nav />
-
-       <main id="main">
-          <Hero />
-          <About />
-         <Pillars />
-         <Method />
-         <Stories />
-         <Resources />
-         <Impact />
-         <FinalCTA />
-       </main>
-
+      <main id="main">
+        <Hero />
+        <About />
+        <Pillars />
+        <Method />
+        <Stories />
+        <FinalCTA />
+      </main>
       <Footer />
     </div>
   );

@@ -30,7 +30,6 @@ const ACCENTS: { value: StoryContent["accent"]; label: string; swatch: string }[
 function newStory(): StoryContent {
   return {
     id: uid(),
-    format: "Story",
     category: "Story",
     title: "",
     who: "",
@@ -49,14 +48,14 @@ function newStory(): StoryContent {
 /* ============================== STORIES ============================== */
 
 export function StoriesAdmin({ toolbar }: { toolbar?: ReactNode }) {
-  const { draft, updateDraft, notify } = useStore();
+  const { content, updateContent, notify } = useStore();
   const img = useImg();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "published" | "draft">("all");
   const [editing, setEditing] = useState<StoryContent | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
 
-  const stories = draft.stories;
+  const stories = content.stories;
   const q = query.trim().toLowerCase();
 
   const visible = useMemo(
@@ -74,7 +73,7 @@ export function StoriesAdmin({ toolbar }: { toolbar?: ReactNode }) {
     [stories, q, filter],
   );
 
-  const write = (next: StoryContent[]) => updateDraft((d) => ({ ...d, stories: next }) as SiteContent);
+  const write = (next: StoryContent[]) => updateContent((c) => ({ ...c, stories: next }) as SiteContent);
 
   const save = (story: StoryContent) => {
     if (!story.title.trim()) return notify("error", "A story needs a title.");
@@ -83,7 +82,7 @@ export function StoriesAdmin({ toolbar }: { toolbar?: ReactNode }) {
     const exists = stories.some((s) => s.id === story.id);
     write(exists ? stories.map((s) => (s.id === story.id ? stamped : s)) : [stamped, ...stories]);
     setEditing(null);
-    notify("success", exists ? "Story updated in your draft." : "Story created in your draft.");
+    notify("success", exists ? "Story saved and live." : "Story created and live.");
   };
 
   const toggleStatus = (story: StoryContent) => {
@@ -91,20 +90,20 @@ export function StoriesAdmin({ toolbar }: { toolbar?: ReactNode }) {
     write(
       stories.map((s) => (s.id === story.id ? { ...s, status, updatedAt: new Date().toISOString() } : s)),
     );
-    notify("info", status === "published" ? "Story marked as published." : "Story unpublished.");
+    notify("info", status === "published" ? "Story is now visible on the website." : "Story hidden from the website.");
   };
 
   const remove = (id: string) => {
     write(stories.filter((s) => s.id !== id));
     setConfirmId(null);
-    notify("info", "Story deleted from your draft.");
+    notify("info", "Story deleted.");
   };
 
   return (
     <div>
       <PageHeader
         title="Stories"
-        description="Create, edit, publish and remove the comics, scenarios and letters shown in the Beyond Now Stories section."
+        description="Create, edit, show or hide the comics, scenarios and letters in the Stories section. Changes go live instantly."
       >
         {toolbar}
         <AdminBtn variant="primary" onClick={() => setEditing(newStory())}>
@@ -166,7 +165,7 @@ export function StoriesAdmin({ toolbar }: { toolbar?: ReactNode }) {
               <div className="flex flex-1 flex-col p-4">
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-display text-[0.68rem] font-bold tracking-[0.14em] text-teal-ink uppercase">
-                    {story.category || story.format}
+                    {story.category}
                   </span>
                   <StatusBadge status={story.status} />
                 </div>
@@ -203,7 +202,7 @@ export function StoriesAdmin({ toolbar }: { toolbar?: ReactNode }) {
       <ConfirmDialog
         open={confirmId !== null}
         title="Delete this story?"
-        body="It will be removed from your draft. The public website only changes once you publish."
+        body="This removes it from the live website immediately."
         confirmLabel="Delete story"
         onCancel={() => setConfirmId(null)}
         onConfirm={() => confirmId && remove(confirmId)}
@@ -258,7 +257,7 @@ function StoryEditorModal({
           <TextInput value={local.title} onChange={(v) => patch({ title: v })} invalid={touched && !local.title.trim()} />
         </Field>
         <Field label="Category" hint="Comic, Scenario, Letter…">
-          <TextInput value={local.category} onChange={(v) => patch({ category: v, format: v })} />
+          <TextInput value={local.category} onChange={(v) => patch({ category: v })} />
         </Field>
         <Field label="Who it's about" hint="e.g. Amara, 17 — SS3">
           <TextInput value={local.who} onChange={(v) => patch({ who: v })} />
@@ -313,7 +312,7 @@ function StoryEditorModal({
             label={local.status === "published" ? "Visible on the website" : "Hidden from the website"}
           />
           <p className="mt-2 text-[0.78rem] text-charcoal/55">
-            Published stories still require a site-wide Publish before visitors see them.
+            Changes go live as soon as you save.
           </p>
         </div>
       </div>
@@ -324,16 +323,16 @@ function StoryEditorModal({
 /* ============================= RESOURCES ============================= */
 
 export function ResourcesAdmin({ toolbar }: { toolbar?: ReactNode }) {
-  const { draft, updateDraft, notify } = useStore();
+  const { content, updateContent, notify } = useStore();
   const [query, setQuery] = useState("");
-  const [openTrack, setOpenTrack] = useState<string | null>(draft.resources[0]?.id ?? null);
+  const [openTrack, setOpenTrack] = useState<string | null>(content.resources[0]?.id ?? null);
   const [confirm, setConfirm] = useState<{ kind: "track" | "item"; trackId: string; itemId?: string } | null>(null);
 
-  const tracks = draft.resources;
+  const tracks = content.resources;
   const q = query.trim().toLowerCase();
 
   const write = (next: ResourceTrackContent[]) =>
-    updateDraft((d) => ({ ...d, resources: next }) as SiteContent);
+    updateContent((c) => ({ ...c, resources: next }) as SiteContent);
 
   const patchTrack = (id: string, patch: Partial<ResourceTrackContent>) =>
     write(tracks.map((t) => (t.id === id ? { ...t, ...patch, updatedAt: new Date().toISOString() } : t)));
@@ -358,7 +357,7 @@ export function ResourcesAdmin({ toolbar }: { toolbar?: ReactNode }) {
     };
     write([...tracks, track]);
     setOpenTrack(track.id);
-    notify("success", "Resource pack created in your draft.");
+    notify("success", "Resource pack created.");
   };
 
   return (
@@ -551,18 +550,18 @@ export function ResourcesAdmin({ toolbar }: { toolbar?: ReactNode }) {
       <ConfirmDialog
         open={confirm !== null}
         title={confirm?.kind === "track" ? "Delete this resource pack?" : "Delete this resource?"}
-        body="It will be removed from your draft. The public website only changes once you publish."
+        body="This removes it from the live website immediately."
         confirmLabel="Delete"
         onCancel={() => setConfirm(null)}
         onConfirm={() => {
           if (!confirm) return;
           if (confirm.kind === "track") {
             write(tracks.filter((t) => t.id !== confirm.trackId));
-            notify("info", "Resource pack deleted from your draft.");
+            notify("info", "Resource pack deleted.");
           } else {
             const track = tracks.find((t) => t.id === confirm.trackId);
             if (track) patchTrack(track.id, { items: track.items.filter((i) => i.id !== confirm.itemId) });
-            notify("info", "Resource deleted from your draft.");
+            notify("info", "Resource deleted.");
           }
           setConfirm(null);
         }}

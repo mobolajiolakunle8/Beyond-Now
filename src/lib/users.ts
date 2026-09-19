@@ -1,5 +1,7 @@
 import {
+  EmailAuthProvider,
   createUserWithEmailAndPassword,
+  reauthenticateWithCredential,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signOut,
@@ -10,9 +12,11 @@ import {
 } from "firebase/auth";
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
+  increment,
   onSnapshot,
   orderBy,
   query,
@@ -21,98 +25,128 @@ import {
   writeBatch,
   type Unsubscribe,
 } from "firebase/firestore";
-import {
-  deleteObject,
-  getDownloadURL,
-  ref as storageRef,
-  uploadBytes,
-} from "firebase/storage";
-import { authErrorMessage, getFirebase } from "@/lib/firebase";
+import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from "firebase/storage";
+import { ADMIN_EMAIL, authErrorMessage, getFirebase } from "@/lib/firebase";
+import { processImageFile } from "@/lib/media";
 
 /* -------------------------------------------------------------------------- */
-/*                              Profile / user shape                          */
+/*                                   Types                                    */
 /* -------------------------------------------------------------------------- */
 
 export type UserRole = "user" | "admin";
+export type UserStatus = "active" | "suspended";
+
+export type UserPreferences = {
+  notifyMessages: boolean;
+  notifyResources: boolean;
+};
 
 export type UserProfile = {
   uid: string;
   email: string;
   name: string;
   role: UserRole;
+  status: UserStatus;
   bio: string;
   avatarUrl: string;
-  status: "active" | "suspended";
+  preferences: UserPreferences;
+  activity: { saved: number; messages: number; notifications: number };
   createdAt: number;
   updatedAt: number;
   lastSeenAt: number;
-  /** Aggregated activity counters (cheap to read). */
-  activity: {
-    saved: number;
-    messages: number;
-    notifications: number;
-  };
 };
 
-/** Seed used when a user first logs in. */
-export function buildEmptyProfile(uid: string, email: string, name: string): UserProfile {
-  const now = Date.now();
-  return {
-    uid,
-    email,
-    name,
-    role: "user",
-    bio: "",
-    avatarUrl: "",
-    status: "active",
-    createdAt: now,
-    updatedAt: now,
-    lastSeenAt: now,
-    activity: { saved: 0, messages: 0, notifications: 0 },
-  };
+export type SavedItem = {
+  id: string;
+  userId: string;
+  /** Stable reference into the CMS, e.g. `resource:<trackId>:<itemId>` */
+  ref: string;
+  title: string;
+  description: string;
+  savedAt: number;
+};
+
+export type NotificationItem = {
+  id: string;
+  userId: string;
+  kind: "message" | "system" | "resource";
+  title: string;
+  body: string;
+  href: string;
+  read: boolean;
+  createdAt: number;
+};
+
+export type AdminRecord = {
+  uid: string;
+  email: string;
+  grantedBy: string;
+  grantedAt: number;
+};
+
+/* -------------------------------------------------------------------------- */
+/*                                  Helpers                                   */
+/* -------------------------------------------------------------------------- */
+
+function fbOrThrow() {
+  const fb = getFirebase();
+  if (!fb) throw new Error("Firebase is not configured.");
+  return fb;
 }
 
+/** Firestore rejects `undefined`; strip it before writing. */
 function scrub<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function userRef(uid: string) {
-  const fb = getFirebase();
-  if (!fb) throw new Error("Firebase is not configured.");
-  return doc(fb.db, "users", uid);
+const userRef = (uid: string) => doc(fbOrThrow().db, "users", uid);
+const adminRef = (uid: string) => doc(fbOrThrow().db, "admins", uid);
+const savedCol = (uid: string) => collection(fbOrThrow().db, "users", uid, "saved");
+const notifCol = (uid: string) => collection(fbOrThrow().db, "users", uid, "notifications");
+
+const noop: Unsubscribe = () => undefined;
+
+export function buildProfile(uid: string, email: string, name: string): UserProfile {
+  const now = Date.now();
+  return {
+    uid,
+    email: email.toLowerCase(),
+    name,
+    role: "user",
+    status: "active",
+    bio: "",
+    avatarUrl: "",
+    preferences: { notifyMessages: true, notifyResources: false },
+    activity: { saved: 0, messages: 0, notifications: 0 },
+    createdAt: now,
+    updatedAt: now,
+    lastSeenAt: now,
+  };
+}
+
+function displayNameFor(user: User): string {
+  return user.displayName?.trim() || user.email?.split("@")[0] || "Member";
 }
 
 /* -------------------------------------------------------------------------- */
-/*                              Auth flows                                    */
+/*                                Auth flows                                  */
 /* -------------------------------------------------------------------------- */
 
-export type SignUpInput = { email: string; password: string; name: string };
-export type SignInInput = { email: string; password: string };
-
-export async function signUp(input: SignUpInput): Promise<UserCredential> {
-  const fb = getFirebase();
-  if (!fb) throw new Error("Firebase is not configured.");
+export async function signUp(input: { email: string; password: string; name: string }): Promise<UserCredential> {
+  const fb = fbOrThrow();
   try {
     const cred = await createUserWithEmailAndPassword(fb.auth, input.email.trim(), input.password);
-    if (input.name.trim()) {
-      await fbUpdateProfile(cred.user, { displayName: input.name.trim() });
-    }
-    // Seed the user document. Cloud Function `onUserCreate` would normally do this,
-    // but a client-side seed keeps the system functional even before deployment.
-    await setDoc(
-      userRef(cred.user.uid),
-      buildEmptyProfile(cred.user.uid, input.email.trim(), input.name.trim() || input.email.split("@")[0]!),
-      { merge: true },
-    );
+    const name = input.name.trim() || displayNameFor(cred.user);
+    if (input.name.trim()) await fbUpdateProfile(cred.user, { displayName: name });
+    await setDoc(userRef(cred.user.uid), buildProfile(cred.user.uid, cred.user.email ?? input.email, name));
     return cred;
   } catch (err) {
     throw new Error(authErrorMessage(err));
   }
 }
 
-export async function signIn(input: SignInInput): Promise<UserCredential> {
-  const fb = getFirebase();
-  if (!fb) throw new Error("Firebase is not configured.");
+export async function signIn(input: { email: string; password: string }): Promise<UserCredential> {
+  const fb = fbOrThrow();
   try {
     return await signInWithEmailAndPassword(fb.auth, input.email.trim(), input.password);
   } catch (err) {
@@ -121,8 +155,7 @@ export async function signIn(input: SignInInput): Promise<UserCredential> {
 }
 
 export async function sendReset(email: string): Promise<void> {
-  const fb = getFirebase();
-  if (!fb) throw new Error("Firebase is not configured.");
+  const fb = fbOrThrow();
   try {
     await sendPasswordResetEmail(fb.auth, email.trim());
   } catch (err) {
@@ -132,100 +165,118 @@ export async function sendReset(email: string): Promise<void> {
 
 export async function signOutCurrent(): Promise<void> {
   const fb = getFirebase();
-  if (!fb) return;
-  await signOut(fb.auth);
+  if (fb) await signOut(fb.auth);
 }
 
-/** Reads custom claim — drives admin gating client-side. Firestore rules are the real source of truth. */
-export async function isAdminUser(user: User): Promise<boolean> {
-  const tokenResult = await user.getIdTokenResult(true);
-  return Boolean(tokenResult.claims.isAdmin);
+/**
+ * Client-side admin detection. Mirrors the server rule exactly:
+ * custom claim → root admin email → `admins/{uid}` allow-list document.
+ * The Firestore/Storage rules are the source of truth; this only shapes the UI.
+ */
+export async function resolveIsAdmin(user: User): Promise<boolean> {
+  try {
+    const token = await user.getIdTokenResult();
+    if (token.claims.isAdmin === true) return true;
+  } catch {
+    /* token unavailable offline — fall through */
+  }
+  if (user.email && user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) return true;
+  try {
+    return (await getDoc(adminRef(user.uid))).exists();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Guarantees the signed-in user has a profile document (covers accounts that
+ * were created before the profile seed existed) and, for administrators,
+ * that their role and allow-list record are in place.
+ */
+export async function ensureUserRecords(user: User, isAdmin: boolean): Promise<UserProfile> {
+  const ref = userRef(user.uid);
+  const snap = await getDoc(ref);
+  let profile: UserProfile;
+
+  if (!snap.exists()) {
+    profile = buildProfile(user.uid, user.email ?? "", displayNameFor(user));
+    if (isAdmin) profile.role = "admin";
+    await setDoc(ref, profile);
+  } else {
+    profile = snap.data() as UserProfile;
+    const patch: Partial<UserProfile> = { lastSeenAt: Date.now() };
+    if (isAdmin && profile.role !== "admin") patch.role = "admin";
+    await updateDoc(ref, patch);
+    profile = { ...profile, ...patch };
+  }
+
+  if (isAdmin) {
+    const admin = await getDoc(adminRef(user.uid));
+    if (!admin.exists()) {
+      const record: AdminRecord = {
+        uid: user.uid,
+        email: user.email ?? "",
+        grantedBy: "bootstrap",
+        grantedAt: Date.now(),
+      };
+      await setDoc(adminRef(user.uid), record);
+    }
+  }
+
+  return profile;
 }
 
 /* -------------------------------------------------------------------------- */
-/*                              Profile reads / writes                        */
+/*                                  Profile                                   */
 /* -------------------------------------------------------------------------- */
 
 export async function fetchProfile(uid: string): Promise<UserProfile | null> {
-  const fb = getFirebase();
-  if (!fb) return null;
-  try {
-    const snap = await getDoc(userRef(uid));
-    return snap.exists() ? (snap.data() as UserProfile) : null;
-  } catch (err) {
-    console.error("fetchProfile", err);
-    return null;
-  }
+  if (!getFirebase()) return null;
+  const snap = await getDoc(userRef(uid));
+  return snap.exists() ? (snap.data() as UserProfile) : null;
 }
 
-export function subscribeProfile(
-  uid: string,
-  onChange: (profile: UserProfile | null) => void,
-  onError?: (msg: string) => void,
-): Unsubscribe {
-  const fb = getFirebase();
-  if (!fb) {
-    onChange(null);
-    return () => undefined;
-  }
-  return onSnapshot(
-    userRef(uid),
-    (snap) => onChange(snap.exists() ? (snap.data() as UserProfile) : null),
-    (err) => onError?.(err.message),
-  );
+export function subscribeProfile(uid: string, onChange: (p: UserProfile | null) => void): Unsubscribe {
+  if (!getFirebase()) return noop;
+  return onSnapshot(userRef(uid), (snap) => onChange(snap.exists() ? (snap.data() as UserProfile) : null));
 }
 
 export async function updateOwnProfile(
   uid: string,
-  patch: { name?: string; bio?: string; avatarUrl?: string },
+  patch: Partial<Pick<UserProfile, "name" | "bio" | "avatarUrl" | "preferences">>,
 ): Promise<void> {
-  const fb = getFirebase();
-  if (!fb) throw new Error("Firebase is not configured.");
-  try {
-    await setDoc(
-      userRef(uid),
-      {
-        ...scrub(patch),
-        uid,
-        updatedAt: Date.now(),
-        lastSeenAt: Date.now(),
-      },
-      { merge: true },
-    );
-    if (patch.name !== undefined && fb.auth.currentUser) {
-      await fbUpdateProfile(fb.auth.currentUser, { displayName: patch.name });
-    }
-  } catch (err) {
-    throw new Error(err instanceof Error ? err.message : "Could not update your profile.");
+  const fb = fbOrThrow();
+  await updateDoc(userRef(uid), { ...scrub(patch), updatedAt: Date.now() });
+  if (patch.name !== undefined && fb.auth.currentUser) {
+    await fbUpdateProfile(fb.auth.currentUser, { displayName: patch.name });
   }
 }
 
 export async function changeOwnPassword(current: string, next: string): Promise<void> {
-  const fb = getFirebase();
-  if (!fb) throw new Error("Firebase is not configured.");
+  const fb = fbOrThrow();
   const user = fb.auth.currentUser;
   if (!user?.email) throw new Error("No signed-in user.");
-  const { EmailAuthProvider, reauthenticateWithCredential } = await import("firebase/auth");
-  const cred = EmailAuthProvider.credential(user.email, current);
-  await reauthenticateWithCredential(user, cred);
-  await fbUpdatePassword(user, next);
+  try {
+    await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, current));
+    await fbUpdatePassword(user, next);
+  } catch (err) {
+    throw new Error(authErrorMessage(err));
+  }
 }
 
 /* -------------------------------------------------------------------------- */
-/*                              Avatar upload                                 */
+/*                                  Avatar                                    */
 /* -------------------------------------------------------------------------- */
 
+const AVATAR_EXTS = ["webp", "png", "jpg", "jpeg"] as const;
+
 export async function uploadAvatar(uid: string, file: File): Promise<string> {
-  const fb = getFirebase();
-  if (!fb) throw new Error("Firebase is not configured.");
-  if (!/^image\//.test(file.type)) throw new Error("Profile picture must be JPG, PNG or WebP.");
+  const fb = fbOrThrow();
+  if (!/^image\/(jpe?g|png|webp)$/.test(file.type)) throw new Error("Profile picture must be JPG, PNG or WebP.");
   if (file.size > 5 * 1024 * 1024) throw new Error("Profile picture must be under 5 MB.");
 
-  // Reuse compressor for consistent output (max 512px square profile picture).
-  const { processImageFile } = await import("@/lib/media");
   const processed = await processImageFile(file);
   const blob = await (await fetch(processed.dataUrl)).blob();
-
   const ext = blob.type === "image/png" ? "png" : "webp";
   const path = `avatars/${uid}/avatar.${ext}`;
 
@@ -239,42 +290,20 @@ export async function uploadAvatar(uid: string, file: File): Promise<string> {
 }
 
 export async function removeAvatar(uid: string): Promise<void> {
-  const fb = getFirebase();
-  if (!fb) throw new Error("Firebase is not configured.");
-  try {
-    for (const ext of ["webp", "png", "jpg", "jpeg"]) {
-      try {
-        await deleteObject(storageRef(fb.storage, `avatars/${uid}/avatar.${ext}`));
-      } catch {
-        /* not present */
-      }
-    }
-    await updateOwnProfile(uid, { avatarUrl: "" });
-  } catch (err) {
-    throw new Error(err instanceof Error ? err.message : "Could not remove avatar.");
-  }
+  const fb = fbOrThrow();
+  await Promise.all(
+    AVATAR_EXTS.map((ext) => deleteObject(storageRef(fb.storage, `avatars/${uid}/avatar.${ext}`)).catch(() => undefined)),
+  );
+  await updateOwnProfile(uid, { avatarUrl: "" });
 }
 
 /* -------------------------------------------------------------------------- */
-/*                              Admin user search                             */
+/*                              Admin: user list                              */
 /* -------------------------------------------------------------------------- */
 
-export async function listAllUsers(): Promise<UserProfile[]> {
+export function subscribeAllUsers(onChange: (users: UserProfile[]) => void, onError?: (msg: string) => void): Unsubscribe {
   const fb = getFirebase();
-  if (!fb) return [];
-  const snap = await getDocs(query(collection(fb.db, "users"), orderBy("createdAt", "desc")));
-  return snap.docs.map((d) => d.data() as UserProfile);
-}
-
-export function subscribeAllUsers(
-  onChange: (users: UserProfile[]) => void,
-  onError?: (msg: string) => void,
-): Unsubscribe {
-  const fb = getFirebase();
-  if (!fb) {
-    onChange([]);
-    return () => undefined;
-  }
+  if (!fb) return noop;
   return onSnapshot(
     query(collection(fb.db, "users"), orderBy("createdAt", "desc")),
     (snap) => onChange(snap.docs.map((d) => d.data() as UserProfile)),
@@ -282,182 +311,100 @@ export function subscribeAllUsers(
   );
 }
 
-export async function adminSetUserStatus(uid: string, status: "active" | "suspended"): Promise<void> {
-  const fb = getFirebase();
-  if (!fb) throw new Error("Firebase is not configured.");
+export async function adminSetUserStatus(uid: string, status: UserStatus): Promise<void> {
   await updateDoc(userRef(uid), { status, updatedAt: Date.now() });
 }
 
-export async function adminSetUserRole(uid: string, role: UserRole): Promise<void> {
-  const fb = getFirebase();
-  if (!fb) throw new Error("Firebase is not configured.");
-  await updateDoc(userRef(uid), { role, updatedAt: Date.now() });
-}
-
-/* -------------------------------------------------------------------------- */
-/*                              Saved resources                               */
-/* -------------------------------------------------------------------------- */
-
-export type SavedItem = {
-  id: string;
-  userId: string;
-  /** Stable reference into the CMS: e.g. resource:trackId:itemId or story:id */
-  ref: string;
-  title: string;
-  description: string;
-  url: string;
-  savedAt: number;
-};
-
-function savedCol(uid: string) {
-  const fb = getFirebase();
-  if (!fb) throw new Error("Firebase is not configured.");
-  return collection(fb.db, "saved", uid, "items");
-}
-
-export function subscribeSaved(
-  uid: string,
-  onChange: (items: SavedItem[]) => void,
-  onError?: (msg: string) => void,
-): Unsubscribe {
-  const fb = getFirebase();
-  if (!fb) {
-    onChange([]);
-    return () => undefined;
+/** Promotes or demotes a user. Keeps `users/{uid}.role` and `admins/{uid}` in sync. */
+export async function adminSetUserRole(uid: string, role: UserRole, grantedBy: string): Promise<void> {
+  const fb = fbOrThrow();
+  const batch = writeBatch(fb.db);
+  batch.update(userRef(uid), { role, updatedAt: Date.now() });
+  if (role === "admin") {
+    const target = await getDoc(userRef(uid));
+    const email = target.exists() ? (target.data() as UserProfile).email : "";
+    const record: AdminRecord = { uid, email, grantedBy, grantedAt: Date.now() };
+    batch.set(adminRef(uid), record);
+  } else {
+    batch.delete(adminRef(uid));
   }
-  return onSnapshot(
-    query(savedCol(uid), orderBy("savedAt", "desc")),
-    (snap) => onChange(snap.docs.map((d) => d.data() as SavedItem)),
-    (err) => onError?.(err.message),
+  await batch.commit();
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                Saved items                                 */
+/* -------------------------------------------------------------------------- */
+
+export function subscribeSaved(uid: string, onChange: (items: SavedItem[]) => void): Unsubscribe {
+  if (!getFirebase()) return noop;
+  return onSnapshot(query(savedCol(uid), orderBy("savedAt", "desc")), (snap) =>
+    onChange(snap.docs.map((d) => d.data() as SavedItem)),
   );
 }
 
-export async function saveResource(uid: string, item: Omit<SavedItem, "id" | "userId" | "savedAt">): Promise<void> {
-  const fb = getFirebase();
-  if (!fb) throw new Error("Firebase is not configured.");
-  const id = `${item.ref.replace(/[^a-z0-9_-]/gi, "_")}_${Date.now()}`;
-  await setDoc(
-    doc(savedCol(uid), id),
-    { ...scrub(item), id, userId: uid, savedAt: Date.now() },
-    { merge: true },
-  );
-  // Bump activity counter atomically.
-  await setDoc(
-    userRef(uid),
-    { activity: { saved: (await getActivity(uid)).saved + 1 } } as Partial<UserProfile>,
-    { merge: true },
-  );
+/** Idempotent: saving the same resource twice keeps a single record. */
+export async function saveResource(uid: string, item: Pick<SavedItem, "ref" | "title" | "description">): Promise<void> {
+  const fb = fbOrThrow();
+  const id = item.ref.replace(/[^a-z0-9_-]/gi, "_");
+  const batch = writeBatch(fb.db);
+  batch.set(doc(savedCol(uid), id), scrub({ ...item, id, userId: uid, savedAt: Date.now() }));
+  batch.update(userRef(uid), { "activity.saved": increment(1), updatedAt: Date.now() });
+  await batch.commit();
 }
 
 export async function removeSaved(uid: string, id: string): Promise<void> {
-  const fb = getFirebase();
-  if (!fb) throw new Error("Firebase is not configured.");
-  await writeBatch(fb.db).delete(doc(savedCol(uid), id)).commit();
-  await setDoc(
-    userRef(uid),
-    { activity: { saved: Math.max(0, (await getActivity(uid)).saved - 1) } } as Partial<UserProfile>,
-    { merge: true },
+  const fb = fbOrThrow();
+  const batch = writeBatch(fb.db);
+  batch.delete(doc(savedCol(uid), id));
+  batch.update(userRef(uid), { "activity.saved": increment(-1), updatedAt: Date.now() });
+  await batch.commit();
+}
+
+/* -------------------------------------------------------------------------- */
+/*                               Notifications                                */
+/* -------------------------------------------------------------------------- */
+
+export function subscribeNotifications(uid: string, onChange: (items: NotificationItem[]) => void): Unsubscribe {
+  if (!getFirebase()) return noop;
+  return onSnapshot(query(notifCol(uid), orderBy("createdAt", "desc")), (snap) =>
+    onChange(snap.docs.map((d) => d.data() as NotificationItem)),
   );
 }
 
-async function getActivity(uid: string): Promise<UserProfile["activity"]> {
-  const profile = await fetchProfile(uid);
-  return profile?.activity ?? { saved: 0, messages: 0, notifications: 0 };
-}
-
-/* -------------------------------------------------------------------------- */
-/*                              Notifications                                 */
-/* -------------------------------------------------------------------------- */
-
-export type NotificationItem = {
-  id: string;
-  userId: string;
-  kind: "message" | "resource" | "system" | "saved";
-  title: string;
-  body: string;
-  href: string;
-  read: boolean;
-  createdAt: number;
-};
-
-function notifCol(uid: string) {
-  const fb = getFirebase();
-  if (!fb) throw new Error("Firebase is not configured.");
-  return collection(fb.db, "notifications", uid, "items");
-}
-
-export function subscribeNotifications(
+export async function pushNotification(
   uid: string,
-  onChange: (items: NotificationItem[]) => void,
-  onError?: (msg: string) => void,
-): Unsubscribe {
-  const fb = getFirebase();
-  if (!fb) {
-    onChange([]);
-    return () => undefined;
-  }
-  return onSnapshot(
-    query(notifCol(uid), orderBy("createdAt", "desc")),
-    (snap) => onChange(snap.docs.map((d) => d.data() as NotificationItem)),
-    (err) => onError?.(err.message),
-  );
-}
-
-export async function pushNotification(uid: string, n: Omit<NotificationItem, "id" | "userId" | "createdAt" | "read">) {
-  const fb = getFirebase();
-  if (!fb) return;
+  n: Pick<NotificationItem, "kind" | "title" | "body" | "href">,
+): Promise<void> {
+  const fb = fbOrThrow();
   const id = `n_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-  await setDoc(doc(notifCol(uid), id), {
-    ...scrub(n),
-    id,
-    userId: uid,
-    read: false,
-    createdAt: Date.now(),
-  });
-  await setDoc(
-    userRef(uid),
-    { activity: { notifications: (await getActivity(uid)).notifications + 1 } } as Partial<UserProfile>,
-    { merge: true },
-  );
+  const batch = writeBatch(fb.db);
+  batch.set(doc(notifCol(uid), id), scrub({ ...n, id, userId: uid, read: false, createdAt: Date.now() }));
+  batch.update(userRef(uid), { "activity.notifications": increment(1) });
+  await batch.commit();
 }
 
-export async function markNotificationRead(uid: string, id: string, read: boolean) {
-  const fb = getFirebase();
-  if (!fb) return;
-  await updateDoc(doc(notifCol(uid), id), { read });
+export async function markNotificationRead(uid: string, id: string): Promise<void> {
+  await updateDoc(doc(notifCol(uid), id), { read: true });
 }
 
-export async function markAllNotificationsRead(uid: string) {
-  const fb = getFirebase();
-  if (!fb) return;
+export async function markAllNotificationsRead(uid: string): Promise<void> {
+  const fb = fbOrThrow();
   const snap = await getDocs(notifCol(uid));
+  if (snap.empty) return;
   const batch = writeBatch(fb.db);
   snap.docs.forEach((d) => batch.update(d.ref, { read: true }));
   await batch.commit();
 }
 
-export async function clearNotifications(uid: string) {
-  const fb = getFirebase();
-  if (!fb) return;
-  const snap = await getDocs(notifCol(uid));
-  const batch = writeBatch(fb.db);
-  snap.docs.forEach((d) => batch.delete(d.ref));
-  await batch.commit();
+export async function deleteNotification(uid: string, id: string): Promise<void> {
+  await deleteDoc(doc(notifCol(uid), id));
 }
 
-export function touchLastSeen(uid: string) {
-  const fb = getFirebase();
-  if (!fb) return;
-  updateDoc(userRef(uid), { lastSeenAt: Date.now() }).catch(() => undefined);
-}
-
-/** Used by the welcome notification in `pushNotification`. */
-export async function sendWelcome(uid: string, name: string) {
+export async function sendWelcome(uid: string, name: string): Promise<void> {
   await pushNotification(uid, {
     kind: "system",
     title: `Welcome${name ? `, ${name.split(" ")[0]}` : ""}!`,
     body: "You can now save resources, track your progress and message the Beyond Now team privately.",
-    href: "#/account",
+    href: "#/account/dashboard",
   });
 }
-

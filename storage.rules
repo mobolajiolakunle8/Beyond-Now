@@ -1,43 +1,40 @@
 rules_version = '2';
 
+// =============================================================================
 // BEYOND NOW — Cloud Storage security rules
 // Deploy: firebase deploy --only storage
 //
-// Buckets:
-//   /media/**           CMS media library (admin-only write)
-//   /avatars/{uid}/**   user profile pictures (owner or admin write)
-//   /articles/**        admin-managed article assets
+//   /media/**          CMS media library         public read · admin write
+//   /avatars/{uid}/**  member profile pictures   public read · owner/admin write
+// =============================================================================
 
 service firebase.storage {
   match /b/{bucket}/o {
-    function isAdmin() {
-      return request.auth != null && request.auth.token.isAdmin == true;
+    function signedIn() {
+      return request.auth != null;
     }
-    function isOwner(uid) {
-      return request.auth != null && request.auth.uid == uid;
+    function isAdmin() {
+      return signedIn() && (
+        request.auth.token.get('isAdmin', false) == true ||
+        request.auth.token.get('email', '') == 'beyondnow.ng@gmail.com' ||
+        firestore.exists(/databases/(default)/documents/admins/$(request.auth.uid))
+      );
     }
     function isImage() {
-      return request.resource.contentType.matches('image/.*');
+      return request.resource.contentType.matches('image/(jpeg|png|webp)');
     }
 
-    // CMS media — public read, admin-only write
     match /media/{allPaths=**} {
       allow read: if true;
       allow write: if isAdmin() && isImage() && request.resource.size < 15 * 1024 * 1024;
     }
 
-    // User avatars — public read, owner or admin write
-    match /avatars/{uid}/{allPaths=**} {
+    match /avatars/{userId}/{allPaths=**} {
       allow read: if true;
-      allow write: if (isOwner(uid) || isAdmin())
+      allow write: if (isAdmin() || (signedIn() && request.auth.uid == userId))
         && isImage()
         && request.resource.size < 5 * 1024 * 1024;
-    }
-
-    // Article attachments
-    match /articles/{allPaths=**} {
-      allow read: if true;
-      allow write: if isAdmin() && request.resource.size < 15 * 1024 * 1024;
+      allow delete: if isAdmin() || (signedIn() && request.auth.uid == userId);
     }
   }
 }

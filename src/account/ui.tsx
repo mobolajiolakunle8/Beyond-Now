@@ -201,12 +201,14 @@ export function AuthShell({
 /** Sidebar wrapper used by every authenticated user account page. */
 export function AccountLayout({
   user,
+  isAdmin = false,
   route,
   go,
   onSignOut,
   children,
 }: {
   user: { name: string; email: string; avatarUrl: string };
+  isAdmin?: boolean;
   route: string;
   go: (id: string) => void;
   onSignOut: () => void;
@@ -243,12 +245,12 @@ export function AccountLayout({
       <div className={cn("fixed inset-0 z-[70] lg:hidden", open ? "" : "pointer-events-none")} aria-hidden={!open}>
         <div onClick={() => setOpen(false)} className={cn("absolute inset-0 bg-navy-deep/60", open ? "opacity-100" : "opacity-0")} />
         <div className={cn("absolute inset-y-0 left-0 w-72 max-w-[85%] bg-navy transition-transform duration-300", open ? "translate-x-0" : "-translate-x-full")}>
-          <Sidebar user={user} route={route} go={(r) => { go(r); setOpen(false); }} onSignOut={onSignOut} />
+          <Sidebar user={user} isAdmin={isAdmin} route={route} go={(r) => { go(r); setOpen(false); }} onSignOut={onSignOut} />
         </div>
       </div>
 
       <aside className="sticky top-0 hidden h-screen w-64 shrink-0 bg-navy lg:block">
-        <Sidebar user={user} route={route} go={go} onSignOut={onSignOut} />
+        <Sidebar user={user} isAdmin={isAdmin} route={route} go={go} onSignOut={onSignOut} />
       </aside>
 
       <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{children}</main>
@@ -270,11 +272,13 @@ export const NAV: { id: string; label: string; icon: string }[] = [
 
 function Sidebar({
   user,
+  isAdmin,
   route,
   go,
   onSignOut,
 }: {
   user: { name: string; email: string; avatarUrl: string };
+  isAdmin: boolean;
   route: string;
   go: (id: string) => void;
   onSignOut: () => void;
@@ -318,6 +322,15 @@ function Sidebar({
       </ul>
 
       <div className="border-t border-white/10 px-4 py-4">
+        {isAdmin && (
+          <a
+            href="#/admin"
+            className="mb-3 flex items-center justify-between rounded-lg border border-sun/40 bg-sun/10 px-3 py-2 font-display text-[0.78rem] font-semibold text-sun transition-colors hover:bg-sun/20"
+          >
+            Admin dashboard
+            <span aria-hidden="true">→</span>
+          </a>
+        )}
         <div className="mb-3 flex items-center gap-2.5">
           {user.avatarUrl ? (
             <img src={user.avatarUrl} alt="" className="h-9 w-9 rounded-full object-cover" />

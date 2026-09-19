@@ -1,37 +1,24 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import {
-  onAuthStateChanged,
-  signOut,
-  type User,
-} from "firebase/auth";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { onAuthStateChanged, type User } from "firebase/auth";
+import { ensureThread, subscribeMessages, subscribeThread, type Message, type Thread } from "@/lib/chat";
 import { getFirebase } from "@/lib/firebase";
 import {
-  fetchProfile,
-  isAdminUser,
+  ensureUserRecords,
+  resolveIsAdmin,
+  sendWelcome,
+  signOutCurrent,
   subscribeNotifications,
   subscribeProfile,
   subscribeSaved,
-  sendWelcome,
   type NotificationItem,
   type SavedItem,
   type UserProfile,
 } from "@/lib/users";
-import { getOrCreateUserThread, subscribeUserThread, type Message, type Thread } from "@/lib/chat";
 
 type UserStoreValue = {
   authReady: boolean;
   authedUser: User | null;
   profile: UserProfile | null;
-  profileLoading: boolean;
   isAdmin: boolean;
   saved: SavedItem[];
   notifications: NotificationItem[];
@@ -39,100 +26,96 @@ type UserStoreValue = {
   messages: Message[];
   unreadNotifications: number;
   unreadMessages: number;
-  refreshProfile: () => Promise<void>;
+  /** Non-null when a realtime listener was rejected (e.g. rules not deployed). */
+  syncError: string | null;
   signOutUser: () => Promise<void>;
 };
 
 const Ctx = createContext<UserStoreValue | null>(null);
+const AUTH_TIMEOUT_MS = 4000;
 
 export function UserStoreProvider({ children }: { children: ReactNode }) {
-  let fb: ReturnType<typeof getFirebase> = null;
-  try {
-    fb = getFirebase();
-  } catch {
-    fb = null;
-  }
+  const fb = getFirebase();
 
   const [authReady, setAuthReady] = useState(!fb);
   const [authedUser, setAuthedUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [profileLoading, setProfileLoading] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [saved, setSaved] = useState<SavedItem[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [thread, setThread] = useState<Thread | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const welcomed = useRef<Set<string>>(new Set());
 
-  /* ---------- Auth listener ----------
-   * Bounded by a watchdog: if Firebase never resolves (offline, bad key,
-   * blocked proxy) we stop waiting instead of hanging on a splash screen. */
+  /* ---------- auth (bounded so a hung SDK never blanks the page) ---------- */
   useEffect(() => {
-    if (!fb) {
-      setAuthReady(true);
-      return;
-    }
+    if (!fb) return;
     let settled = false;
     const unsub = onAuthStateChanged(fb.auth, (user) => {
       settled = true;
       setAuthedUser(user);
-      setAuthReady(true);
+      if (!user) {
+        setProfile(null);
+        setIsAdmin(false);
+        setAuthReady(true);
+      }
     });
     const watchdog = window.setTimeout(() => {
       if (!settled) setAuthReady(true);
-    }, 4000);
+    }, AUTH_TIMEOUT_MS);
     return () => {
       unsub();
       window.clearTimeout(watchdog);
     };
   }, [fb]);
 
-  /* ---------- Profile + role ---------- */
-  const refreshProfile = useCallback(async () => {
-    if (!authedUser) {
-      setProfile(null);
-      setIsAdmin(false);
-      return;
-    }
-    setProfileLoading(true);
-    try {
-      const [p, claim] = await Promise.all([fetchProfile(authedUser.uid), isAdminUser(authedUser)]);
-      setProfile(p);
-      setIsAdmin(Boolean(p?.role === "admin" || claim));
-    } finally {
-      setProfileLoading(false);
-    }
+  /* ---------- profile, role, thread bootstrap ---------- */
+  useEffect(() => {
+    if (!authedUser) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const admin = await resolveIsAdmin(authedUser);
+        if (cancelled) return;
+        setIsAdmin(admin);
+        const p = await ensureUserRecords(authedUser, admin);
+        if (cancelled) return;
+        setProfile(p);
+        // Every member gets a private thread the moment they sign in, so the
+        // team can reach out first and the user never hits a "no thread" state.
+        if (!admin) await ensureThread(p);
+      } catch (err) {
+        if (!cancelled) setSyncError(err instanceof Error ? err.message : "Could not load your account.");
+      } finally {
+        if (!cancelled) setAuthReady(true);
+      }
+    })();
+
+    const unsub = subscribeProfile(authedUser.uid, (p) => {
+      if (p) setProfile(p);
+    });
+    return () => {
+      cancelled = true;
+      unsub();
+    };
   }, [authedUser]);
 
-  useEffect(() => {
-    if (!authedUser) {
-      setProfile(null);
-      setIsAdmin(false);
-      return;
-    }
-    // Initial load
-    void refreshProfile();
-    // Live updates
-    const unsub = subscribeProfile(authedUser.uid, (p) => {
-      setProfile(p);
-    });
-    return unsub;
-  }, [authedUser, refreshProfile]);
-
-  /* ---------- Saved + notifications ---------- */
+  /* ---------- saved + notifications ---------- */
   useEffect(() => {
     if (!authedUser) {
       setSaved([]);
       setNotifications([]);
       return;
     }
-    const unsubSaved = subscribeSaved(authedUser.uid, (items) => setSaved(items));
-    const unsubNotif = subscribeNotifications(authedUser.uid, (items) => {
+    const uid = authedUser.uid;
+    const unsubSaved = subscribeSaved(uid, setSaved);
+    const unsubNotif = subscribeNotifications(uid, (items) => {
       setNotifications(items);
-      // Welcome notification for first sign-in.
-      if (items.length === 0 && !welcomed.current.has(authedUser.uid)) {
-        welcomed.current.add(authedUser.uid);
-        void sendWelcome(authedUser.uid, authedUser.displayName || authedUser.email?.split("@")[0] || "");
+      if (items.length === 0 && !welcomed.current.has(uid)) {
+        welcomed.current.add(uid);
+        void sendWelcome(uid, authedUser.displayName ?? "").catch(() => undefined);
       }
     });
     return () => {
@@ -141,50 +124,33 @@ export function UserStoreProvider({ children }: { children: ReactNode }) {
     };
   }, [authedUser]);
 
-  /* ---------- Thread + messages ---------- */
+  /* ---------- realtime thread + messages ---------- */
   useEffect(() => {
     if (!authedUser) {
       setThread(null);
       setMessages([]);
       return;
     }
-    let cancelled = false;
-    (async () => {
-      try {
-        const profile = await fetchProfile(authedUser.uid);
-        if (!profile || cancelled) return;
-        await getOrCreateUserThread(profile);
-      } catch (err) {
-        console.error("thread bootstrap", err);
-      }
-    })();
-    const unsub = subscribeUserThread(authedUser.uid, (t, msgs) => {
-      if (t) setThread(t);
-      if (msgs.length) setMessages(msgs);
-    });
+    const uid = authedUser.uid;
+    const onError = (msg: string) => setSyncError(msg);
+    const unsubThread = subscribeThread(uid, setThread, onError);
+    const unsubMessages = subscribeMessages(uid, setMessages, onError);
     return () => {
-      cancelled = true;
-      unsub();
+      unsubThread();
+      unsubMessages();
     };
   }, [authedUser]);
 
-  const signOutUser = useCallback(async () => {
-    if (!fb) return;
-    await signOut(fb.auth);
-  }, [fb]);
+  const signOutUser = useCallback(() => signOutCurrent(), []);
 
   const unreadNotifications = useMemo(() => notifications.filter((n) => !n.read).length, [notifications]);
-  const unreadMessages = useMemo(() => {
-    if (!thread) return 0;
-    return thread.unreadByUser;
-  }, [thread]);
+  const unreadMessages = thread?.unreadByUser ?? 0;
 
   const value = useMemo<UserStoreValue>(
     () => ({
       authReady,
       authedUser,
       profile,
-      profileLoading,
       isAdmin,
       saved,
       notifications,
@@ -192,24 +158,10 @@ export function UserStoreProvider({ children }: { children: ReactNode }) {
       messages,
       unreadNotifications,
       unreadMessages,
-      refreshProfile,
+      syncError,
       signOutUser,
     }),
-    [
-      authReady,
-      authedUser,
-      profile,
-      profileLoading,
-      isAdmin,
-      saved,
-      notifications,
-      thread,
-      messages,
-      unreadNotifications,
-      unreadMessages,
-      refreshProfile,
-      signOutUser,
-    ],
+    [authReady, authedUser, profile, isAdmin, saved, notifications, thread, messages, unreadNotifications, unreadMessages, syncError, signOutUser],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

@@ -78,32 +78,30 @@ const GROUPS: Group[] = [
       { path: "hero.badge", label: "Badge text", type: "text" },
       { path: "hero.headingLead", label: "Headline — first part", type: "text", half: true },
       { path: "hero.headingAccent", label: "Headline — highlighted words", type: "text", half: true },
-      { path: "hero.body", label: "Supporting message", type: "textarea", rows: 5 },
-      { path: "hero.ctaPrimary", label: "Primary button label", type: "text", half: true },
-      { path: "hero.ctaSecondary", label: "WhatsApp button label", type: "text", half: true },
+      { path: "hero.body", label: "Supporting message", type: "textarea", rows: 4 },
+      { path: "hero.ctaPrimary", label: "WhatsApp button label", type: "text", half: true },
+      { path: "hero.ctaSecondary", label: "Account button label", type: "text", half: true },
+      { path: "hero.trust", label: "Trust line items", type: "list" },
       { path: "hero.quote", label: "Promise quote", type: "text" },
-      { path: "hero.quoteLabel", label: "Promise label", type: "text", half: true },
-      { path: "hero.statValue", label: "Stat value", type: "text", half: true },
-      { path: "hero.statLabel", label: "Stat label", type: "text", half: true },
-      { path: "hero.imageMain", label: "Main hero image", type: "image" },
-      { path: "hero.imageMainAlt", label: "Main image alt text", type: "text" },
+      { path: "hero.quoteLabel", label: "Promise label", type: "text" },
+      { path: "hero.imageMain", label: "Hero image", type: "image" },
+      { path: "hero.imageMainAlt", label: "Image alt text", type: "text" },
     ],
   },
   {
     id: "about",
     title: "About & Founder",
-    description: "Who we are, why we exist and the founder's vision quote.",
+    description: "Who we are and the founder's vision quote.",
     fields: [
       { path: "about.eyebrow", label: "Eyebrow", type: "text" },
       { path: "about.headingLead", label: "Heading — first part", type: "text", half: true },
       { path: "about.headingAccent", label: "Heading — highlighted words", type: "text", half: true },
       { path: "about.paragraphs", label: "Body paragraphs", type: "listLong" },
-      { path: "about.founderEyebrow", label: "Founder block eyebrow", type: "text" },
-      { path: "about.founderQuote", label: "Founder's vision quote", type: "textarea", rows: 4 },
+      { path: "about.founderEyebrow", label: "Founder block eyebrow", type: "text", half: true },
       { path: "about.founderName", label: "Founder name / title", type: "text", half: true },
-      { path: "about.ctaLabel", label: "Button label", type: "text", half: true },
-      { path: "about.imageMain", label: "Main about image", type: "image" },
-      { path: "about.imageMainAlt", label: "Main image alt text", type: "text" },
+      { path: "about.founderQuote", label: "Founder's vision quote", type: "textarea", rows: 4 },
+      { path: "about.imageMain", label: "Photo", type: "image" },
+      { path: "about.imageMainAlt", label: "Photo alt text", type: "text" },
     ],
   },
   {
@@ -121,7 +119,7 @@ const GROUPS: Group[] = [
       {
         path: "pillars",
         title: "Pillars",
-        description: "Each pillar becomes a tab with its own photo and questions.",
+        description: "Each pillar is an expandable card with its questions and a WhatsApp prompt.",
         singular: "pillar",
         labelKey: "title",
         fields: [
@@ -130,19 +128,8 @@ const GROUPS: Group[] = [
           { path: "line", label: "One-line summary", type: "text" },
           { path: "body", label: "Description", type: "textarea", rows: 4 },
           { path: "prompts", label: "Questions we sit with", type: "list" },
-          { path: "image", label: "Photo", type: "image" },
-          { path: "alt", label: "Photo alt text", type: "text" },
         ],
-        factory: () => ({
-          id: uid(),
-          index: "05",
-          title: "Beyond …",
-          line: "",
-          body: "",
-          image: "",
-          alt: "",
-          prompts: [],
-        }),
+        factory: () => ({ id: uid(), index: "05", title: "Beyond …", line: "", body: "", prompts: [] }),
       },
     ],
   },
@@ -155,108 +142,49 @@ const GROUPS: Group[] = [
       { path: "methodSection.headingLead", label: "Heading — first part", type: "text", half: true },
       { path: "methodSection.headingAccent", label: "Heading — highlighted word", type: "text", half: true },
       { path: "methodSection.lead", label: "Intro paragraph", type: "textarea", rows: 3 },
-      { path: "methodSection.quote", label: "Closing quote", type: "text" },
     ],
     arrays: [
       {
         path: "method",
         title: "Method steps",
-        description: "Shown in order as a numbered progress track.",
+        description: "Shown in order as four numbered steps.",
         singular: "step",
         labelKey: "title",
         fields: [
           { path: "title", label: "Step name", type: "text", half: true },
           { path: "kicker", label: "Short kicker", type: "text", half: true },
-          { path: "body", label: "Description", type: "textarea", rows: 4 },
-          { path: "actions", label: "What this looks like", type: "list" },
+          { path: "body", label: "Description", type: "textarea", rows: 3 },
         ],
-        factory: () => ({ id: uid(), title: "New step", kicker: "", body: "", actions: [] }),
+        factory: () => ({ id: uid(), title: "New step", kicker: "", body: "" }),
       },
     ],
   },
   {
     id: "storiesSection",
     title: "Stories Section",
-    description: "Headings and format cards. Manage the story cards themselves under Stories.",
+    description: "Section headings. Manage the story cards themselves under Stories.",
     fields: [
       { path: "storiesSection.eyebrow", label: "Eyebrow", type: "text" },
       { path: "storiesSection.headingLead", label: "Heading — first part", type: "text", half: true },
       { path: "storiesSection.headingAccent", label: "Heading — highlighted word", type: "text", half: true },
-      { path: "storiesSection.lead", label: "Intro paragraph", type: "textarea", rows: 3 },
-      { path: "storiesSection.pullQuote", label: "Pull quote", type: "textarea", rows: 2 },
-      { path: "storiesSection.shareLabel", label: "Share button label", type: "text" },
-    ],
-    arrays: [
-      {
-        path: "storiesSection.formats",
-        title: "Format cards",
-        description: "The small cards describing comics, scenarios and letters.",
-        singular: "format",
-        labelKey: "label",
-        fields: [
-          { path: "label", label: "Label", type: "text", half: true },
-          { path: "detail", label: "Detail", type: "text", half: true },
-        ],
-        factory: () => ({ id: uid(), label: "New format", detail: "" }),
-      },
-    ],
-  },
-  {
-    id: "resourcesSection",
-    title: "Resources Section",
-    description: "Headings and the 'start here' steps. Manage packs under Resources.",
-    fields: [
-      { path: "resourcesSection.eyebrow", label: "Eyebrow", type: "text" },
-      { path: "resourcesSection.headingLead", label: "Heading — first part", type: "text" },
-      { path: "resourcesSection.headingAccent", label: "Heading — highlighted word", type: "text", half: true },
-      { path: "resourcesSection.headingTail", label: "Heading — end", type: "text", half: true },
-      { path: "resourcesSection.lead", label: "Intro paragraph", type: "textarea", rows: 3 },
-      { path: "resourcesSection.startHere", label: "'Start here' steps", type: "list" },
-    ],
-  },
-  {
-    id: "impact",
-    title: "Impact & Vision",
-    description: "Long-term vision pillars, headline numbers and the charter quote.",
-    fields: [
-      { path: "impact.eyebrow", label: "Eyebrow", type: "text" },
-      { path: "impact.headingLead", label: "Heading — first part", type: "textarea", rows: 2 },
-      { path: "impact.headingAccent", label: "Heading — highlighted word", type: "text", half: true },
-      { path: "impact.headingTail", label: "Heading — end", type: "text", half: true },
-      { path: "impact.lead", label: "Intro paragraph", type: "textarea", rows: 3 },
-      { path: "impact.quote", label: "Charter quote", type: "textarea", rows: 3 },
-      { path: "impact.quoteLabel", label: "Quote attribution", type: "text" },
-      { path: "impact.image", label: "Background image", type: "image" },
-    ],
-    arrays: [
-      {
-        path: "impact.vision",
-        title: "Vision pillars",
-        description: "Guidance, learning, support and long-term growth.",
-        singular: "pillar",
-        labelKey: "title",
-        fields: [
-          { path: "title", label: "Title", type: "text" },
-          { path: "body", label: "Body", type: "textarea", rows: 3 },
-        ],
-        factory: () => ({ id: uid(), title: "New pillar", body: "" }),
-      },
+      { path: "storiesSection.lead", label: "Intro paragraph", type: "textarea", rows: 2 },
+      { path: "storiesSection.shareLabel", label: "Share link label", type: "text" },
     ],
   },
   {
     id: "finalCta",
     title: "Final Call To Action",
-    description: "The yellow 'What happens next matters' band and its contact form.",
+    description: "The yellow 'What happens next matters' band.",
     fields: [
       { path: "finalCta.eyebrow", label: "Eyebrow", type: "text" },
       { path: "finalCta.heading", label: "Heading", type: "text" },
-      { path: "finalCta.body", label: "Body", type: "textarea", rows: 4 },
+      { path: "finalCta.body", label: "Body", type: "textarea", rows: 3 },
       { path: "finalCta.whatsappLabel", label: "WhatsApp caption", type: "text" },
       { path: "finalCta.emailLabel", label: "Email caption", type: "text" },
+      { path: "finalCta.accountTitle", label: "Account box title", type: "text", half: true },
+      { path: "finalCta.accountCta", label: "Account button label", type: "text", half: true },
+      { path: "finalCta.accountBody", label: "Account box body", type: "textarea", rows: 2 },
       { path: "finalCta.safetyNote", label: "Safety note", type: "textarea", rows: 3 },
-      { path: "finalCta.formTitle", label: "Form title", type: "text" },
-      { path: "finalCta.formIntro", label: "Form intro", type: "textarea", rows: 2 },
-      { path: "finalCta.roles", label: "Role options", type: "list" },
     ],
   },
   {
@@ -275,14 +203,14 @@ const GROUPS: Group[] = [
 
 function FieldRenderer({
   def,
-  draft,
+  content,
   set,
 }: {
   def: FieldDef;
-  draft: SiteContent;
+  content: SiteContent;
   set: (path: string, value: unknown) => void;
 }) {
-  const raw = getPath(draft, def.path);
+  const raw = getPath(content, def.path);
 
   if (def.type === "image") {
     return (
@@ -327,14 +255,14 @@ function FieldRenderer({
 
 function ArrayEditor({
   def,
-  draft,
+  content,
   set,
 }: {
   def: ArrayDef;
-  draft: SiteContent;
+  content: SiteContent;
   set: (path: string, value: unknown) => void;
 }) {
-  const items = (getPath(draft, def.path) as Record<string, unknown>[]) ?? [];
+  const items = (getPath(content, def.path) as Record<string, unknown>[]) ?? [];
   const [open, setOpen] = useState<number | null>(0);
 
   const update = (next: Record<string, unknown>[]) => set(def.path, next);
@@ -405,7 +333,7 @@ function ArrayEditor({
                     variant="ghost"
                     title={`Delete ${def.singular}`}
                     onClick={() => {
-                      if (window.confirm(`Delete this ${def.singular}? You can still discard the draft afterwards.`)) {
+                      if (window.confirm(`Delete this ${def.singular}? This change goes live immediately.`)) {
                         update(items.filter((_, idx) => idx !== i));
                         setOpen(null);
                       }
@@ -420,7 +348,7 @@ function ArrayEditor({
                       <FieldRenderer
                         key={f.path}
                         def={{ ...f, path: `${def.path}.${i}.${f.path}` }}
-                        draft={draft}
+                        content={content}
                         set={set}
                       />
                     ))}
@@ -443,11 +371,11 @@ function ArrayEditor({
 }
 
 export function ContentEditor({ toolbar }: { toolbar?: ReactNode }) {
-  const { draft, updateDraft } = useStore();
+  const { content, updateContent } = useStore();
   const [activeId, setActiveId] = useState(GROUPS[0].id);
   const [query, setQuery] = useState("");
 
-  const set = (path: string, value: unknown) => updateDraft((d) => setPath(d, path, value));
+  const set = (path: string, value: unknown) => updateContent((c) => setPath(c, path, value));
 
   const q = query.trim().toLowerCase();
   const filtered = useMemo(() => {
@@ -466,7 +394,7 @@ export function ContentEditor({ toolbar }: { toolbar?: ReactNode }) {
     <div>
       <PageHeader
         title="Website Content"
-        description="Edit every word and image on the public landing page. Changes are saved to your draft and stay private until you publish."
+        description="Edit every word and image on the public website. Changes are saved and published automatically."
       >
         {toolbar}
       </PageHeader>
@@ -518,12 +446,12 @@ export function ContentEditor({ toolbar }: { toolbar?: ReactNode }) {
             <Card title={active.title} description={active.description}>
               <div className="grid gap-4 sm:grid-cols-2">
                 {(active.fields ?? []).map((f) => (
-                  <FieldRenderer key={f.path} def={f} draft={draft} set={set} />
+                  <FieldRenderer key={f.path} def={f} content={content} set={set} />
                 ))}
               </div>
             </Card>
             {(active.arrays ?? []).map((a) => (
-              <ArrayEditor key={a.path} def={a} draft={draft} set={set} />
+              <ArrayEditor key={a.path} def={a} content={content} set={set} />
             ))}
           </div>
         </div>

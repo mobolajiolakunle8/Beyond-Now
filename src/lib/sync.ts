@@ -20,14 +20,14 @@ import { uid } from "@/lib/content";
 import { firestoreErrorMessage, getFirebase } from "@/lib/firebase";
 import { processImageFile } from "@/lib/media";
 
-export type Meta = { publishedAt: string; draftSavedAt: string };
-
+/**
+ * The live website document. Every admin edit is written here directly —
+ * there is no separate draft; what is stored is what visitors see.
+ */
 export type SiteDocument = {
   published: SiteContent;
-  draft: SiteContent;
-  meta: Meta;
   updatedAt: string;
-  updatedBy?: string;
+  updatedBy: string;
 };
 
 const SITE_DOC = "main";
@@ -70,20 +70,15 @@ export async function pullSiteDocument(): Promise<SiteDocument | null> {
   }
 }
 
-export async function pushSiteDocument(
-  payload: Omit<SiteDocument, "updatedAt"> & { updatedBy?: string },
-): Promise<void> {
+/** Full-document write (not a merge) so fields removed from the schema are purged. */
+export async function pushSiteDocument(published: SiteContent, updatedBy: string): Promise<string> {
   const refDoc = siteRef();
   if (!refDoc) throw new Error("Firebase is not configured.");
+  const updatedAt = new Date().toISOString();
   try {
-    await setDoc(
-      refDoc,
-      scrub({
-        ...payload,
-        updatedAt: new Date().toISOString(),
-      }),
-      { merge: true },
-    );
+    const payload: SiteDocument = { published, updatedAt, updatedBy };
+    await setDoc(refDoc, scrub(payload));
+    return updatedAt;
   } catch (err) {
     throw new Error(firestoreErrorMessage(err));
   }

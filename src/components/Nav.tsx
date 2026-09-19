@@ -124,26 +124,15 @@ export function Nav() {
                 <span>My account</span>
               </a>
             ) : (
-              <>
-                <a
-                  href="#/account/signin"
-                  className={cn(
-                    "hidden rounded-full px-3 py-1.5 font-display text-[0.78rem] font-semibold transition-colors sm:inline-block",
-                    onLight ? "text-navy hover:text-teal-ink" : "text-white/75 hover:text-white",
-                  )}
-                >
-                  Sign in
-                </a>
-                <Btn
-                  href="#/account/signup"
-                  variant={onLight ? "navy" : "sun"}
-                  size="sm"
-                  className="hidden sm:inline-flex"
-                  ariaLabel="Create an account"
-                >
-                  Create account
-                </Btn>
-              </>
+              <a
+                href="#/account/signin"
+                className={cn(
+                  "hidden rounded-full px-3 py-1.5 font-display text-[0.82rem] font-semibold transition-colors sm:inline-block",
+                  onLight ? "text-navy hover:text-teal-ink" : "text-white/80 hover:text-white",
+                )}
+              >
+                Sign in
+              </a>
             )}
             <Btn
               href={wa(TALK_MESSAGE)}

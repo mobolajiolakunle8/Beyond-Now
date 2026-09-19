@@ -210,13 +210,13 @@ export function MediaLibraryPage({ toolbar }: { toolbar?: ReactNode }) {
 /* ============================ SITE SETTINGS ============================ */
 
 export function SettingsPage({ toolbar }: { toolbar?: ReactNode }) {
-  const { draft, updateDraft, notify } = useStore();
+  const { content, updateContent, notify } = useStore();
   const img = useImg();
-  const { settings, brand } = draft;
+  const { settings, brand } = content;
   const [confirmLogo, setConfirmLogo] = useState(false);
   const [logoUnlocked, setLogoUnlocked] = useState(false);
 
-  const set = (path: string, value: unknown) => updateDraft((d) => setPath(d, path, value) as SiteContent);
+  const set = (path: string, value: unknown) => updateContent((c) => setPath(c, path, value) as SiteContent);
 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(settings.email.trim());
   const waDigits = settings.whatsapp.replace(/\D/g, "");
@@ -232,7 +232,7 @@ export function SettingsPage({ toolbar }: { toolbar?: ReactNode }) {
       </PageHeader>
 
       <div className="grid gap-5 lg:grid-cols-2">
-        <Card title="Contact details" description="Used by every WhatsApp button, the contact form and the footer.">
+        <Card title="Contact details" description="Used by every WhatsApp button and the footer.">
           <div className="grid gap-4">
             <Field
               label="Contact email"
@@ -347,7 +347,7 @@ export function SettingsPage({ toolbar }: { toolbar?: ReactNode }) {
                     value={brand.logoUrl}
                     onChange={(v) => {
                       set("brand.logoUrl", v);
-                      if (v) notify("success", "Official logo updated in your draft.");
+                      if (v) notify("success", "Official logo updated and live.");
                     }}
                   />
                 </div>
@@ -428,7 +428,7 @@ export function SettingsPage({ toolbar }: { toolbar?: ReactNode }) {
 /* ============================ ADMIN ACCOUNT ============================ */
 
 export function AccountPage({ toolbar }: { toolbar?: ReactNode }) {
-  const { account, updateAccount, changePassword, logout, resetEverything, notify } = useStore();
+  const { account, updateAccount, changePassword, logout, resetContent } = useStore();
   const [name, setName] = useState(account?.name ?? "");
   const [email, setEmail] = useState(account?.email ?? "");
   const [current, setCurrent] = useState("");
@@ -459,7 +459,7 @@ export function AccountPage({ toolbar }: { toolbar?: ReactNode }) {
               <AdminBtn
                 variant="primary"
                 disabled={!emailValid || !name.trim()}
-                onClick={() => void updateAccount({ name: name.trim(), email: email.trim() })}
+                onClick={() => void updateAccount({ name: name.trim() })}
               >
                 Save profile
               </AdminBtn>
@@ -510,8 +510,8 @@ export function AccountPage({ toolbar }: { toolbar?: ReactNode }) {
 
         <Card title="Danger zone" description="Restore the original website content shipped with Beyond Now.">
           <p className="mb-4 text-[0.85rem] text-charcoal/65">
-            This replaces both your draft and the published website with the original copy and photography. Your
-            media library and account are not affected.
+            This replaces the live website with the original copy and photography. Your media library and account are
+            not affected.
           </p>
           <AdminBtn variant="danger" onClick={() => setConfirmReset(true)}>
             Reset all website content
@@ -522,14 +522,11 @@ export function AccountPage({ toolbar }: { toolbar?: ReactNode }) {
       <ConfirmDialog
         open={confirmReset}
         title="Reset all website content?"
-        body="Every edit you have made — draft and published — will be permanently replaced with the original Beyond Now content. This cannot be undone."
+        body="Every edit you have made will be permanently replaced with the original Beyond Now content, live immediately. This cannot be undone."
         confirmLabel="Yes, reset everything"
         onCancel={() => setConfirmReset(false)}
         onConfirm={() => {
-          void resetEverything().then(() => {
-            setConfirmReset(false);
-            notify("info", "Website content restored to defaults.");
-          });
+          void resetContent().then(() => setConfirmReset(false));
         }}
       />
     </div>

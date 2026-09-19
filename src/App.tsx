@@ -30,66 +30,33 @@ function BootSplash() {
 }
 
 function Router() {
-  const { published, draft, media, ready } = useStore();
+  const { content, media, ready } = useStore();
   const hash = useHashRoute();
 
-  // Swap `media:<id>` references for real image data before rendering.
-  const livePublished = useMemo(() => resolveContentMedia(published, media), [published, media]);
-  const liveDraft = useMemo(() => resolveContentMedia(draft, media), [draft, media]);
+  // Swap `media:<id>` references for real image URLs before rendering.
+  const live = useMemo(() => resolveContentMedia(content, media), [content, media]);
 
-  // The public website renders IMMEDIATELY from the local cache (or defaults).
-  // Cloud sync happens in the background — a slow or unavailable Firebase must
-  // never blank the page. Only the dashboards wait, and even they are bounded
-  // by the store's boot watchdog.
-  if ((hash.startsWith("#/admin") || hash.startsWith("#/account")) && !ready) {
-    return <BootSplash />;
-  }
-
-  // #/account/<section> → user dashboard, #/admin/<section> → CMS dashboard,
-  // #/preview → draft render, anything else → public site.
-  if (hash.startsWith("#/account")) {
-    return (
-      <ContentProvider value={livePublished}>
-        <AccountApp />
-      </ContentProvider>
-    );
-  }
-
-  if (hash.startsWith("#/admin")) {
-    const route = hash.replace(/^#\/admin\/?/, "").split("/")[0];
-    return (
-      <ContentProvider value={liveDraft}>
-        <AdminApp route={route} />
-      </ContentProvider>
-    );
-  }
-
-  if (hash.startsWith("#/preview")) {
-    return (
-      <ContentProvider value={liveDraft}>
-        <div className="relative">
-          <div className="pointer-events-none fixed top-3 left-1/2 z-[100] -translate-x-1/2">
-            <span className="rounded-full bg-navy/90 px-3.5 py-1.5 font-display text-[0.68rem] font-bold tracking-[0.14em] text-sun uppercase shadow-lg backdrop-blur">
-              Draft preview
-            </span>
-          </div>
-          <LandingPage applySeo={false} />
-        </div>
-      </ContentProvider>
-    );
-  }
+  // The public website paints immediately from cache; only the dashboards wait
+  // (and even they are bounded by the store's boot watchdog).
+  const isApp = hash.startsWith("#/admin") || hash.startsWith("#/account");
+  if (isApp && !ready) return <BootSplash />;
 
   return (
-    <ContentProvider value={livePublished}>
-      <LandingPage />
+    <ContentProvider value={live}>
+      {hash.startsWith("#/account") ? (
+        <AccountApp />
+      ) : hash.startsWith("#/admin") ? (
+        <AdminApp route={hash.replace(/^#\/admin\/?/, "").split("/")[0]} />
+      ) : (
+        <LandingPage />
+      )}
     </ContentProvider>
   );
 }
 
 export default function App() {
-  // UserStoreProvider sits at the root because the PUBLIC navbar renders
-  // account-aware controls (sign in / my account). Nesting it only inside the
-  // account app made the landing page throw on first render.
+  // UserStoreProvider sits at the root because the public navbar renders
+  // account-aware controls and the admin dashboard reads the signed-in user.
   return (
     <ErrorBoundary>
       <StoreProvider>
