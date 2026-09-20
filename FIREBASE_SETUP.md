@@ -71,7 +71,7 @@ firebase use default        # → beyond-now-14935 (from .firebaserc)
 **Option B (Firebase CLI):**
 ```bash
 npm run deploy:rules
-# runs: firebase deploy --only database,firestore:rules,storage
+# runs: firebase deploy --only database,storage
 ```
 
 ### Website (Hosting)
@@ -128,7 +128,7 @@ once it has landed.
 
 - [ ] Email/Password enabled
 - [ ] Root admin user created (`beyondnow.ng@gmail.com`)
-- [ ] `firestore.rules` + `storage.rules` deployed
+- [ ] `database.rules.json` + `storage.rules` published
 - [ ] `npm run build && firebase deploy --only hosting:default`
 - [ ] `.env` not committed
 - [ ] Admin password rotated after first sign-in (Admin → Admin Account)

@@ -296,7 +296,7 @@ All queries use a single ordered field, which Firestore indexes automatically:
 | `users/{uid}/notifications` | `orderBy createdAt desc` |
 | `articles` | `orderBy updatedAt desc` |
 
-`firestore.indexes.json` is intentionally empty — no composite indexes are required.
+The app sorts records client-side, so no Realtime Database `.indexOn` entries are required.
 
 ---
 

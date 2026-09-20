@@ -6,6 +6,11 @@ rules_version = '2';
 //
 //   /media/**          CMS media library         public read · admin write
 //   /avatars/{uid}/**  member profile pictures   public read · owner/admin write
+//
+// NOTE: Storage rules cannot read the Realtime Database, so the admin check
+// here relies on the ID token only (root-admin email, or an `isAdmin` custom
+// claim set with the Admin SDK). The RTDB `admins/{uid}` allow-list governs
+// database access; it cannot be consulted from Storage.
 // =============================================================================
 
 service firebase.storage {
@@ -15,26 +20,33 @@ service firebase.storage {
     }
     function isAdmin() {
       return signedIn() && (
-        ('isAdmin' in request.auth.token && request.auth.token.isAdmin == true) ||
-        ('email' in request.auth.token && request.auth.token.email.lower() == 'beyondnow.ng@gmail.com') ||
-        firestore.exists(/databases/(default)/documents/admins/$(request.auth.uid))
+        request.auth.token.get('isAdmin', false) == true ||
+        request.auth.token.get('email', '') == 'beyondnow.ng@gmail.com'
       );
     }
     function isImage() {
       return request.resource.contentType.matches('image/(jpeg|png|webp)');
     }
 
+    // CMS media library — public read, admin write
     match /media/{allPaths=**} {
       allow read: if true;
       allow write: if isAdmin() && isImage() && request.resource.size < 15 * 1024 * 1024;
+      allow delete: if isAdmin();
     }
 
+    // Member profile pictures — public read, owner or admin write
     match /avatars/{userId}/{allPaths=**} {
       allow read: if true;
       allow write: if (isAdmin() || (signedIn() && request.auth.uid == userId))
         && isImage()
         && request.resource.size < 5 * 1024 * 1024;
       allow delete: if isAdmin() || (signedIn() && request.auth.uid == userId);
+    }
+
+    // Deny anything outside the two buckets above.
+    match /{allPaths=**} {
+      allow read, write: if false;
     }
   }
 }

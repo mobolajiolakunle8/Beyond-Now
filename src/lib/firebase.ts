@@ -1,14 +1,12 @@
 import { initializeApp, getApps, type FirebaseApp } from "firebase/app";
 import { getAnalytics, isSupported as analyticsSupported, type Analytics } from "firebase/analytics";
 import { getAuth, type Auth } from "firebase/auth";
-import { getFirestore, type Firestore } from "firebase/firestore";
 import { getDatabase, type Database } from "firebase/database";
 import { getStorage, type FirebaseStorage } from "firebase/storage";
 
 export type FirebaseServices = {
   app: FirebaseApp;
   auth: Auth;
-  db: Firestore;
   rtdb: Database;
   storage: FirebaseStorage;
   analytics: Analytics | null;
@@ -60,7 +58,7 @@ export function firebaseInitError(): string | null {
 }
 
 /**
- * Initializes the Firebase app and core services (Auth, RTDB, Firestore, Storage).
+ * Initializes the Firebase app and core services (Auth, Realtime Database, Storage).
  * Embedded defaults guarantee it always connects to beyond-now-14935 and its RTDB.
  */
 export function getFirebase(): FirebaseServices | null {
@@ -84,7 +82,6 @@ export function getFirebase(): FirebaseServices | null {
     cached = {
       app,
       auth: getAuth(app),
-      db: getFirestore(app),
       rtdb: getDatabase(app),
       storage: getStorage(app),
       analytics: null,
@@ -141,7 +138,7 @@ export function authErrorMessage(err: unknown): string {
   }
 }
 
-export function firestoreErrorMessage(err: unknown): string {
+export function databaseErrorMessage(err: unknown): string {
   const code =
     err && typeof err === "object" && "code" in err ? String((err as { code: string }).code) : "";
   const raw = err instanceof Error ? err.message : "Cloud sync failed.";

@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { ensureThread, subscribeMessages, subscribeThread, type Message, type Thread } from "@/lib/chat";
 import { listenLoop } from "@/lib/listen";
-import { firestoreErrorMessage, getFirebase } from "@/lib/firebase";
+import { databaseErrorMessage, getFirebase } from "@/lib/firebase";
 import {
   buildProfile,
   ensureUserRecords,
@@ -114,7 +114,7 @@ export function UserStoreProvider({ children }: { children: ReactNode }) {
         if (!admin) await ensureThread(p);
         setSyncErrorOnce(null);
       } catch (err) {
-        if (!cancelled) setSyncErrorOnce(firestoreErrorMessage(err));
+        if (!cancelled) setSyncErrorOnce(databaseErrorMessage(err));
       } finally {
         if (!cancelled) setAuthReady(true);
       }

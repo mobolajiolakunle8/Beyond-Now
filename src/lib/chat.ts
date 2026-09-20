@@ -1,5 +1,5 @@
 import { get, onValue, push, ref, set, update, type Unsubscribe } from "firebase/database";
-import { firestoreErrorMessage, getFirebase } from "@/lib/firebase";
+import { databaseErrorMessage, getFirebase } from "@/lib/firebase";
 import { pushNotification } from "@/lib/users";
 
 export type ThreadStatus = "open" | "resolved";
@@ -106,11 +106,11 @@ export function subscribeThread(
         }
       },
       (err) => {
-        onError?.(firestoreErrorMessage(err));
+        onError?.(databaseErrorMessage(err));
       },
     );
   } catch (err) {
-    onError?.(firestoreErrorMessage(err));
+    onError?.(databaseErrorMessage(err));
     return noop;
   }
 }
@@ -136,11 +136,11 @@ export function subscribeMessages(
         }
       },
       (err) => {
-        onError?.(firestoreErrorMessage(err));
+        onError?.(databaseErrorMessage(err));
       },
     );
   } catch (err) {
-    onError?.(firestoreErrorMessage(err));
+    onError?.(databaseErrorMessage(err));
     return noop;
   }
 }
@@ -172,11 +172,11 @@ export function subscribeAllThreads(
         }
       },
       (err) => {
-        onError?.(firestoreErrorMessage(err));
+        onError?.(databaseErrorMessage(err));
       },
     );
   } catch (err) {
-    onError?.(firestoreErrorMessage(err));
+    onError?.(databaseErrorMessage(err));
     return noop;
   }
 }

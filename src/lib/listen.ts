@@ -1,4 +1,4 @@
-import type { Unsubscribe } from "firebase/firestore";
+import type { Unsubscribe } from "firebase/database";
 
 /**
  * Re-attaches a Firestore listener after a fatal error with exponential backoff.

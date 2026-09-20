@@ -12,7 +12,7 @@ import {
 } from "firebase/auth";
 import { get, onValue, push, ref, remove, set, update, type Unsubscribe } from "firebase/database";
 import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from "firebase/storage";
-import { ADMIN_EMAIL, authErrorMessage, firestoreErrorMessage, getFirebase } from "@/lib/firebase";
+import { ADMIN_EMAIL, authErrorMessage, databaseErrorMessage, getFirebase } from "@/lib/firebase";
 import { processImageFile } from "@/lib/media";
 
 /* -------------------------------------------------------------------------- */
@@ -234,11 +234,11 @@ export function subscribeProfile(
         }
       },
       (err) => {
-        onError?.(firestoreErrorMessage(err));
+        onError?.(databaseErrorMessage(err));
       },
     );
   } catch (err) {
-    onError?.(firestoreErrorMessage(err));
+    onError?.(databaseErrorMessage(err));
     return noop;
   }
 }
@@ -325,10 +325,10 @@ export function subscribeAllUsers(
           onChange([]);
         }
       },
-      (err) => onError?.(firestoreErrorMessage(err)),
+      (err) => onError?.(databaseErrorMessage(err)),
     );
   } catch (err) {
-    onError?.(firestoreErrorMessage(err));
+    onError?.(databaseErrorMessage(err));
     return noop;
   }
 }
@@ -373,10 +373,10 @@ export function subscribeSaved(
           onChange([]);
         }
       },
-      (err) => onError?.(firestoreErrorMessage(err)),
+      (err) => onError?.(databaseErrorMessage(err)),
     );
   } catch (err) {
-    onError?.(firestoreErrorMessage(err));
+    onError?.(databaseErrorMessage(err));
     return noop;
   }
 }
@@ -436,10 +436,10 @@ export function subscribeNotifications(
           onChange([]);
         }
       },
-      (err) => onError?.(firestoreErrorMessage(err)),
+      (err) => onError?.(databaseErrorMessage(err)),
     );
   } catch (err) {
-    onError?.(firestoreErrorMessage(err));
+    onError?.(databaseErrorMessage(err));
     return noop;
   }
 }

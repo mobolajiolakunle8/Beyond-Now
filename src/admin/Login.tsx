@@ -147,9 +147,10 @@ export function Login() {
                       with a strong password.
                     </p>
                     <p>
-                      3. Deploy the included security rules (
-                      <code className="rounded bg-bone px-1 py-0.5">firestore.rules</code> +{" "}
-                      <code className="rounded bg-bone px-1 py-0.5">storage.rules</code>).
+                      3. Publish the security rules (
+                      <code className="rounded bg-bone px-1 py-0.5">database.rules.json</code> +{" "}
+                      <code className="rounded bg-bone px-1 py-0.5">storage.rules</code>) with{" "}
+                      <code className="rounded bg-bone px-1 py-0.5">npm run deploy:rules</code>.
                     </p>
                     <p className="text-[0.75rem] text-charcoal/55">
                       After the first sign-in you can change the password from Admin Account.

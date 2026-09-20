@@ -2,7 +2,7 @@ import { get, onValue, ref, remove, set, update, type Unsubscribe } from "fireba
 import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes, type UploadMetadata } from "firebase/storage";
 import type { MediaItem, SiteContent } from "@/lib/content";
 import { uid } from "@/lib/content";
-import { firestoreErrorMessage, getFirebase } from "@/lib/firebase";
+import { databaseErrorMessage, getFirebase } from "@/lib/firebase";
 import { processImageFile } from "@/lib/media";
 
 export type SiteDocument = {
@@ -35,7 +35,7 @@ export async function pullSiteDocument(): Promise<SiteDocument | null> {
     if (!snap.exists()) return null;
     return snap.val() as SiteDocument;
   } catch (err) {
-    throw new Error(firestoreErrorMessage(err));
+    throw new Error(databaseErrorMessage(err));
   }
 }
 
@@ -47,7 +47,7 @@ export async function pushSiteDocument(published: SiteContent, updatedBy: string
     await set(ref(db, "site/main"), payload);
     return updatedAt;
   } catch (err) {
-    throw new Error(firestoreErrorMessage(err));
+    throw new Error(databaseErrorMessage(err));
   }
 }
 
@@ -67,11 +67,11 @@ export function subscribeSiteDocument(
         onData(snap.exists() ? (snap.val() as SiteDocument) : null);
       },
       (err) => {
-        onError?.(firestoreErrorMessage(err));
+        onError?.(databaseErrorMessage(err));
       },
     );
   } catch (err) {
-    onError?.(firestoreErrorMessage(err));
+    onError?.(databaseErrorMessage(err));
     return noop;
   }
 }
@@ -109,7 +109,7 @@ export async function pullMediaLibrary(): Promise<MediaItem[]> {
       .map(cloudToMediaItem)
       .sort((a, b) => (a.uploadedAt < b.uploadedAt ? 1 : -1));
   } catch (err) {
-    throw new Error(firestoreErrorMessage(err));
+    throw new Error(databaseErrorMessage(err));
   }
 }
 
@@ -136,10 +136,10 @@ export function subscribeMediaLibrary(
           .sort((a, b) => (a.uploadedAt < b.uploadedAt ? 1 : -1));
         onData(items);
       },
-      (err) => onError?.(firestoreErrorMessage(err)),
+      (err) => onError?.(databaseErrorMessage(err)),
     );
   } catch (err) {
-    onError?.(firestoreErrorMessage(err));
+    onError?.(databaseErrorMessage(err));
     return noop;
   }
 }

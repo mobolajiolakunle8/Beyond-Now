@@ -12,7 +12,7 @@ import {
   type Message,
   type Thread,
 } from "@/lib/chat";
-import { firestoreErrorMessage, getFirebase } from "@/lib/firebase";
+import { databaseErrorMessage, getFirebase } from "@/lib/firebase";
 import { listenLoop } from "@/lib/listen";
 import { formatDate, formatDateTime, relativeTime } from "@/lib/media";
 import { useStore } from "@/lib/store";
@@ -109,7 +109,7 @@ function Conversation({ uid, seed, className }: { uid: string; seed?: Pick<UserP
       await sendAdminMessage(target, text, { uid: adminUid, name: adminName });
       setText("");
     } catch (err) {
-      setError(firestoreErrorMessage(err));
+      setError(databaseErrorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -294,7 +294,7 @@ function UserDrawer({ user, onClose }: { user: UserProfile; onClose: () => void 
       await task();
       notify("success", ok);
     } catch (err) {
-      notify("error", firestoreErrorMessage(err));
+      notify("error", databaseErrorMessage(err));
     } finally {
       setBusy(false);
       setConfirm(null);
@@ -530,10 +530,10 @@ export function ArticlesAdmin() {
             setArticles([]);
           }
         },
-        (err) => notify("error", firestoreErrorMessage(err)),
+        (err) => notify("error", databaseErrorMessage(err)),
       );
     } catch (err) {
-      notify("error", firestoreErrorMessage(err));
+      notify("error", databaseErrorMessage(err));
       return () => undefined;
     }
   }, [notify]);
@@ -564,7 +564,7 @@ export function ArticlesAdmin() {
       setEditing(null);
       notify("success", "Article saved.");
     } catch (err) {
-      notify("error", firestoreErrorMessage(err));
+      notify("error", databaseErrorMessage(err));
     }
   };
 
@@ -575,7 +575,7 @@ export function ArticlesAdmin() {
       await remove(ref(fb.rtdb, `articles/${id}`));
       notify("info", "Article deleted.");
     } catch (err) {
-      notify("error", firestoreErrorMessage(err));
+      notify("error", databaseErrorMessage(err));
     } finally {
       setConfirmDelete(null);
     }
