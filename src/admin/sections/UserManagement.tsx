@@ -96,7 +96,11 @@ function Conversation({ uid, seed, className }: { uid: string; seed?: Pick<UserP
   }, [messages.length]);
 
   const send = async () => {
-    if (busy || !account?.uid) return;
+    if (busy || !text.trim()) return;
+    if (!account?.uid) {
+      setError("Your administrator session expired. Please sign in again.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
