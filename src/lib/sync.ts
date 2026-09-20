@@ -73,7 +73,7 @@ export async function pullSiteDocument(): Promise<SiteDocument | null> {
 /** Full-document write (not a merge) so fields removed from the schema are purged. */
 export async function pushSiteDocument(published: SiteContent, updatedBy: string): Promise<string> {
   const refDoc = siteRef();
-  if (!refDoc) throw new Error("Cannot reach Firebase right now. Please check your connection and try again.");
+  if (!refDoc) throw new Error("Firebase is not configured.");
   const updatedAt = new Date().toISOString();
   try {
     const payload: SiteDocument = { published, updatedAt, updatedBy };
@@ -172,7 +172,7 @@ export function subscribeMediaLibrary(
  */
 export async function uploadMediaToCloud(file: File): Promise<MediaItem> {
   const fb = getFirebase();
-  if (!fb) throw new Error("Cannot reach Firebase right now. Please check your connection and try again.");
+  if (!fb) throw new Error("Firebase is not configured.");
 
   // Reuse the existing compressor — it returns a data URL we convert to a Blob.
   const processed = await processImageFile(file);
@@ -214,7 +214,7 @@ export async function uploadMediaToCloud(file: File): Promise<MediaItem> {
 
 export async function deleteMediaFromCloud(item: MediaItem & { storagePath?: string }): Promise<void> {
   const fb = getFirebase();
-  if (!fb) throw new Error("Cannot reach Firebase right now. Please check your connection and try again.");
+  if (!fb) throw new Error("Firebase is not configured.");
 
   // Best-effort Storage delete. Metadata always goes.
   try {
@@ -243,7 +243,7 @@ export async function deleteMediaFromCloud(item: MediaItem & { storagePath?: str
 
 export async function renameMediaInCloud(id: string, name: string): Promise<void> {
   const fb = getFirebase();
-  if (!fb) throw new Error("Cannot reach Firebase right now. Please check your connection and try again.");
+  if (!fb) throw new Error("Firebase is not configured.");
   await setDoc(doc(fb.db, MEDIA_COLLECTION, id), { name }, { merge: true });
 }
 
@@ -253,7 +253,7 @@ export async function renameMediaInCloud(id: string, name: string): Promise<void
  */
 export async function replaceMediaInCloud(id: string, file: File): Promise<MediaItem> {
   const fb = getFirebase();
-  if (!fb) throw new Error("Cannot reach Firebase right now. Please check your connection and try again.");
+  if (!fb) throw new Error("Firebase is not configured.");
 
   // Remove any existing object for this id, then upload under the same id.
   try {

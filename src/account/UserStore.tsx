@@ -4,6 +4,7 @@ import { ensureThread, subscribeMessages, subscribeThread, type Message, type Th
 import { listenLoop } from "@/lib/listen";
 import { getFirebase } from "@/lib/firebase";
 import {
+  buildProfile,
   ensureUserRecords,
   resolveIsAdmin,
   sendWelcome,
@@ -93,25 +94,25 @@ export function UserStoreProvider({ children }: { children: ReactNode }) {
     if (!authedUser) return;
     let cancelled = false;
 
+    // Immediately seed local profile fallback from authenticated session
+    setProfile((prev) => prev || buildProfile(
+      authedUser.uid,
+      authedUser.email || "",
+      authedUser.displayName || authedUser.email?.split("@")[0] || "Member"
+    ));
+
     (async () => {
       try {
         const admin = await resolveIsAdmin(authedUser);
         if (cancelled) return;
         setIsAdmin(admin);
-        const { profile: loaded, degraded, reason } = await ensureUserRecords(authedUser, admin);
+        const p = await ensureUserRecords(authedUser, admin);
         if (cancelled) return;
-        setProfile(loaded);
+        setProfile(p);
         // Every member gets a private thread the moment they sign in, so the
         // team can reach out first and the user never hits a "no thread" state.
-        if (!admin) {
-          await ensureThread({
-            uid: loaded.uid,
-            name: loaded.name,
-            email: loaded.email,
-            avatarUrl: loaded.avatarUrl,
-          }).catch(() => undefined);
-        }
-        setSyncErrorOnce(degraded ? (reason ?? null) : null);
+        if (!admin) await ensureThread(p);
+        setSyncErrorOnce(null);
       } catch (err) {
         if (!cancelled) setSyncErrorOnce(err instanceof Error ? err.message : "Could not load your account.");
       } finally {

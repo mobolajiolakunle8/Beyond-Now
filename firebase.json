@@ -1,6 +1,6 @@
 {
   "hosting": {
-    "target": "default",
+    "site": "beyond-now-14935",
     "public": "dist",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "cleanUrls": true,

@@ -8,28 +8,32 @@ every time you ship.
 
 ---
 
-## 1. Configuration — nothing to set up
+## 1. Environment variables
 
-The production Firebase config for **`beyond-now-14935`** is compiled into
-`src/lib/firebase.ts`. A Firebase web config is public by design (it identifies
-the project; it authorises nothing — Security Rules and Authentication do that),
-so shipping it removes a whole class of deploy failures: a CI build without the
-git-ignored `.env` used to produce an app that could not reach Firebase at all.
-
-```
-apiKey             AIzaSyBFCcuKcHSPsMIKK3o5kZjFnfoKaRPG5Sw
-authDomain         beyond-now-14935.firebaseapp.com
-databaseURL        https://beyond-now-14935-default-rtdb.firebaseio.com
-projectId          beyond-now-14935
-storageBucket      beyond-now-14935.firebasestorage.app
-messagingSenderId  198562263965
-appId              1:198562263965:web:26b12df22078a93886b574
-measurementId      G-SHHCW15QQJ
+```bash
+cp .env.example .env
 ```
 
-`.env` is **optional** and only needed to point a build at a *different*
-project (staging, a fork). Copy `.env.example` → `.env` and override any of
-`VITE_FIREBASE_*`, `VITE_ADMIN_EMAIL`, `VITE_ADMIN_NAME`.
+`.env` is already filled for `beyond-now-14935`. Vite exposes only `VITE_*` vars.
+
+| Variable | Purpose |
+|---|---|
+| `VITE_FIREBASE_API_KEY` | Web API key |
+| `VITE_FIREBASE_AUTH_DOMAIN` | `beyond-now-14935.firebaseapp.com` |
+| `VITE_FIREBASE_PROJECT_ID` | `beyond-now-14935` |
+| `VITE_FIREBASE_STORAGE_BUCKET` | `beyond-now-14935.firebasestorage.app` |
+| `VITE_FIREBASE_MESSAGING_SENDER_ID` | Sender id |
+| `VITE_FIREBASE_APP_ID` | Web app id |
+| `VITE_FIREBASE_MEASUREMENT_ID` | Analytics (optional) |
+| `VITE_ADMIN_EMAIL` | Root administrator email (`beyondnow.ng@gmail.com`) |
+| `VITE_ADMIN_NAME` | Display name for the root administrator |
+
+`.env` is git-ignored. Commit `.env.example` only.
+
+If `.env` is missing, the app runs in **local mode** (content in the browser
+only; the admin signs in with `VITE_ADMIN_EMAIL` and any 8+ character password).
+
+---
 
 ## 2. Firebase console (once)
 
@@ -57,8 +61,17 @@ firebase use default        # → beyond-now-14935 (from .firebaserc)
 
 ### Security rules (deploy first, and again whenever `*.rules` change)
 
+**Option A (Firebase Console - fastest):**
+1. Open [Firebase Console](https://console.firebase.google.com/) → project **beyond-now-14935**
+2. Go to **Firestore Database** → **Rules** tab
+3. Copy the entire contents of `firestore.rules` and paste it into the editor
+4. Click **Publish** (active immediately!)
+5. (Optional) Go to **Storage** → **Rules** tab → paste `storage.rules` → **Publish**
+
+**Option B (Firebase CLI):**
 ```bash
-firebase deploy --only firestore:rules,storage
+npm run deploy:rules
+# or: firebase deploy --only firestore:rules,storage
 ```
 
 ### Website (Hosting)

@@ -4,88 +4,78 @@ rules_version = '2';
 // BEYOND NOW — Cloud Firestore security rules
 // Deploy: firebase deploy --only firestore:rules
 //
-// Identity model
-//   admin  → any ONE of:
-//              • custom claim  request.auth.token.isAdmin == true   (set via Admin SDK)
-//              • the root admin email (bootstrap, no server code required)
-//              • an allow-list document at admins/{uid} (created by an existing admin)
-//   member → any other signed-in user
-//   public → unauthenticated visitor (read-only access to the website content)
-//
-// Rules are the source of truth. The UI mirrors them for a better experience,
-// but nothing here relies on client-side checks.
+// Identity model:
+//   - Administrator: request.auth.token.isAdmin == true, OR
+//                    email == 'beyondnow.ng@gmail.com', OR
+//                    document exists at /databases/$(database)/documents/admins/$(uid)
+//   - Member: Any signed-in user
+//   - Public: Read-only access to published website content and media
 // =============================================================================
 
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ------------------------------------------------------------ helpers ---
     function signedIn() {
       return request.auth != null;
     }
     function uid() {
       return request.auth.uid;
     }
+    function authEmail() {
+      return request.auth.token.get('email', '');
+    }
+    function isRootAdmin() {
+      return signedIn() && (
+        authEmail() == 'beyondnow.ng@gmail.com' ||
+        authEmail().lower() == 'beyondnow.ng@gmail.com'
+      );
+    }
     function isAdmin() {
       return signedIn() && (
-        ('isAdmin' in request.auth.token && request.auth.token.isAdmin == true) ||
-        ('email' in request.auth.token && request.auth.token.email.lower() == 'beyondnow.ng@gmail.com') ||
+        isRootAdmin() ||
+        request.auth.token.get('isAdmin', false) == true ||
         exists(/databases/$(database)/documents/admins/$(uid()))
       );
     }
     function isSelf(id) {
       return signedIn() && uid() == id;
     }
-    function isActiveMember() {
-      return signedIn() && (
-        !exists(/databases/$(database)/documents/users/$(uid())) ||
-        get(/databases/$(database)/documents/users/$(uid())).data.status != 'suspended'
-      );
-    }
-    function unchanged(field) {
-      return request.resource.data[field] == resource.data[field];
-    }
 
-    // ------------------------------------------------- website content (CMS)
-    // site/main holds the live website. Public read; admin write.
+    // ------------------------------------------------- Website Content (CMS)
+    // Public read for website visitors; write permitted for administrators.
     match /site/{docId} {
       allow read: if true;
       allow write: if isAdmin();
     }
 
-    // Media library metadata (binaries live in Cloud Storage /media)
+    // Media library metadata
     match /media/{mediaId} {
       allow read: if true;
       allow write: if isAdmin();
     }
 
-    // Long-form articles for signed-in members
+    // Articles for authenticated users
     match /articles/{articleId} {
       allow read: if signedIn();
       allow write: if isAdmin();
     }
 
-    // ----------------------------------------------------- admin allow-list
+    // ------------------------------------------------- Admin Allow-List
     match /admins/{adminId} {
-      allow read: if isSelf(adminId) || isAdmin();
-      allow write: if isAdmin();
+      allow read: if signedIn();
+      allow write: if isRootAdmin() || isAdmin();
     }
 
-    // ------------------------------------------------------------- users ---
+    // ------------------------------------------------- Member Profiles
     match /users/{userId} {
       allow read: if isSelf(userId) || isAdmin();
+      
+      // User can create their own profile upon signing up
+      allow create: if isSelf(userId);
 
-      // A member may create only their own profile, as a plain active user.
-      allow create: if isSelf(userId)
-        && request.resource.data.uid == userId
-        && request.resource.data.role == 'user'
-        && request.resource.data.status == 'active';
-
-      // Members may edit their own profile but never their role or status.
-      // Administrators may change anything (role, status).
-      allow update: if isAdmin()
-        || (isSelf(userId) && unchanged('role') && unchanged('status') && unchanged('uid') && unchanged('createdAt'));
-
+      // User can update their own profile; admins can update any profile
+      allow update: if isSelf(userId) || isAdmin();
+      
       allow delete: if isAdmin();
 
       // Bookmarked resources
@@ -93,49 +83,30 @@ service cloud.firestore {
         allow read, write: if isSelf(userId) || isAdmin();
       }
 
-      // In-app notifications. Members may read, mark read and delete their
-      // own; creation is done by the system (the member's own client for
-      // welcome/test notices, or an administrator when replying).
+      // Notifications
       match /notifications/{itemId} {
-        allow read, create, update, delete: if isSelf(userId) || isAdmin();
+        allow read, write: if isSelf(userId) || isAdmin();
       }
     }
 
-    // ----------------------------------------------------------- threads ---
-    // One private thread per member, keyed by the member's uid.
+    // ------------------------------------------------- Chat Threads
+    // Thread ID is the member's uid (one private thread per user)
     match /threads/{threadId} {
       allow read: if isSelf(threadId) || isAdmin();
-
-      // Created by the member themself or by an administrator reaching out.
-      allow create: if (isSelf(threadId) && request.resource.data.userId == threadId) || isAdmin();
-
-      // Members can update their own thread (read receipts, last-message
-      // metadata written alongside a new message). Suspended members cannot.
-      allow update: if isAdmin() || (isSelf(threadId) && isActiveMember() && unchanged('userId'));
-
+      allow create: if isSelf(threadId) || isAdmin();
+      allow update: if isSelf(threadId) || isAdmin();
       allow delete: if isAdmin();
 
+      // Messages inside the thread
       match /messages/{messageId} {
         allow read: if isSelf(threadId) || isAdmin();
-
-        // A member may only add messages to their own thread, as themself,
-        // and only while their account is active. Admins post as admin.
-        allow create: if
-          (isSelf(threadId)
-            && isActiveMember()
-            && request.resource.data.senderUid == uid()
-            && request.resource.data.senderRole == 'user'
-            && request.resource.data.threadId == threadId
-            && request.resource.data.text is string
-            && request.resource.data.text.size() > 0
-            && request.resource.data.text.size() <= 2000)
-          ||
-          (isAdmin()
-            && request.resource.data.senderUid == uid()
-            && request.resource.data.senderRole == 'admin'
-            && request.resource.data.threadId == threadId);
-
-        // Messages are immutable once sent; admins may moderate.
+        
+        // Members can create messages in their own thread; Admins can create in any thread
+        allow create: if signedIn() && (
+          (isSelf(threadId) && request.resource.data.senderUid == uid()) ||
+          isAdmin()
+        );
+        
         allow update, delete: if isAdmin();
       }
     }

@@ -26,7 +26,7 @@ import {
   type Unsubscribe,
 } from "firebase/firestore";
 import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from "firebase/storage";
-import { ADMIN_EMAIL, authErrorMessage, firestoreErrorMessage, getFirebase, isPermissionError } from "@/lib/firebase";
+import { ADMIN_EMAIL, authErrorMessage, getFirebase } from "@/lib/firebase";
 import { processImageFile } from "@/lib/media";
 
 /* -------------------------------------------------------------------------- */
@@ -90,7 +90,7 @@ export type AdminRecord = {
 
 function fbOrThrow() {
   const fb = getFirebase();
-  if (!fb) throw new Error("Cannot reach Firebase right now. Please check your connection and try again.");
+  if (!fb) throw new Error("Firebase is not configured.");
   return fb;
 }
 
@@ -137,16 +137,8 @@ export async function signUp(input: { email: string; password: string; name: str
   try {
     const cred = await createUserWithEmailAndPassword(fb.auth, input.email.trim(), input.password);
     const name = input.name.trim() || displayNameFor(cred.user);
-    if (input.name.trim()) {
-      await fbUpdateProfile(cred.user, { displayName: name }).catch(() => undefined);
-    }
-    // The Auth account already exists at this point. If the profile document
-    // cannot be written (rules not deployed yet) we must NOT fail the sign-up —
-    // the member is signed in, and `ensureUserRecords` retries on every load.
-    await setDoc(
-      userRef(cred.user.uid),
-      buildProfile(cred.user.uid, cred.user.email ?? input.email, name),
-    ).catch(() => undefined);
+    if (input.name.trim()) await fbUpdateProfile(cred.user, { displayName: name });
+    await setDoc(userRef(cred.user.uid), buildProfile(cred.user.uid, cred.user.email ?? input.email, name));
     return cred;
   } catch (err) {
     throw new Error(authErrorMessage(err));
@@ -212,63 +204,31 @@ export async function writeAdminAllowList(uid: string, email: string, grantedBy 
  * were created before the profile seed existed) and, for administrators,
  * that their role and allow-list record are in place.
  */
-export async function ensureUserRecords(
-  user: User,
-  isAdmin: boolean,
-): Promise<{ profile: UserProfile; degraded: boolean; reason?: string }> {
-  const fallback = buildProfile(user.uid, user.email ?? "", displayNameFor(user));
-  if (isAdmin) fallback.role = "admin";
-
+export async function ensureUserRecords(user: User, isAdmin: boolean): Promise<UserProfile> {
   const ref = userRef(user.uid);
-  let profile = fallback;
-  let degraded = false;
-  let reason: string | undefined;
+  const snap = await getDoc(ref);
+  let profile: UserProfile;
 
-  try {
-    const snap = await getDoc(ref);
-    if (!snap.exists()) {
-      await setDoc(ref, fallback);
-      profile = fallback;
-    } else {
-      const stored = snap.data() as UserProfile;
-      const patch: Partial<UserProfile> = { lastSeenAt: Date.now() };
-      if (isAdmin && stored.role !== "admin") patch.role = "admin";
-      // A failed "last seen" stamp must not block sign-in.
-      await updateDoc(ref, patch).catch(() => undefined);
-      profile = { ...fallback, ...stored, ...patch };
-    }
-  } catch (err) {
-    // Rules not deployed, or offline. Run on a local profile so the member can
-    // still use the account; listeners heal it as soon as access is restored.
-    degraded = true;
-    reason = firestoreErrorMessage(err);
+  if (!snap.exists()) {
+    profile = buildProfile(user.uid, user.email ?? "", displayNameFor(user));
+    if (isAdmin) profile.role = "admin";
+    await setDoc(ref, profile);
+  } else {
+    profile = snap.data() as UserProfile;
+    const patch: Partial<UserProfile> = { lastSeenAt: Date.now() };
+    if (isAdmin && profile.role !== "admin") patch.role = "admin";
+    await updateDoc(ref, patch);
+    profile = { ...profile, ...patch };
   }
 
   if (isAdmin) {
-    try {
-      const admin = await getDoc(adminRef(user.uid));
-      if (!admin.exists()) await writeAdminAllowList(user.uid, user.email ?? "", "bootstrap");
-    } catch (err) {
-      if (!degraded && isPermissionError(err)) {
-        degraded = true;
-        reason = firestoreErrorMessage(err);
-      }
+    const admin = await getDoc(adminRef(user.uid));
+    if (!admin.exists()) {
+      await writeAdminAllowList(user.uid, user.email ?? "", "bootstrap");
     }
   }
 
-  return { profile, degraded, reason };
-}
-
-/**
- * Best-effort activity counter. Deliberately swallows every error: these are
- * statistics, and they must never break the action that triggered them.
- */
-export async function bumpActivity(uid: string, field: keyof UserProfile["activity"], by = 1): Promise<void> {
-  try {
-    await setDoc(userRef(uid), { activity: { [field]: increment(by) } }, { merge: true });
-  } catch {
-    /* non-critical */
-  }
+  return profile;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -395,24 +355,20 @@ export function subscribeSaved(uid: string, onChange: (items: SavedItem[]) => vo
 
 /** Idempotent: saving the same resource twice keeps a single record. */
 export async function saveResource(uid: string, item: Pick<SavedItem, "ref" | "title" | "description">): Promise<void> {
-  fbOrThrow();
+  const fb = fbOrThrow();
   const id = item.ref.replace(/[^a-z0-9_-]/gi, "_");
-  try {
-    await setDoc(doc(savedCol(uid), id), scrub({ ...item, id, userId: uid, savedAt: Date.now() }));
-  } catch (err) {
-    throw new Error(firestoreErrorMessage(err));
-  }
-  void bumpActivity(uid, "saved", 1);
+  const batch = writeBatch(fb.db);
+  batch.set(doc(savedCol(uid), id), scrub({ ...item, id, userId: uid, savedAt: Date.now() }));
+  batch.update(userRef(uid), { "activity.saved": increment(1), updatedAt: Date.now() });
+  await batch.commit();
 }
 
 export async function removeSaved(uid: string, id: string): Promise<void> {
-  fbOrThrow();
-  try {
-    await deleteDoc(doc(savedCol(uid), id));
-  } catch (err) {
-    throw new Error(firestoreErrorMessage(err));
-  }
-  void bumpActivity(uid, "saved", -1);
+  const fb = fbOrThrow();
+  const batch = writeBatch(fb.db);
+  batch.delete(doc(savedCol(uid), id));
+  batch.update(userRef(uid), { "activity.saved": increment(-1), updatedAt: Date.now() });
+  await batch.commit();
 }
 
 /* -------------------------------------------------------------------------- */
@@ -432,10 +388,12 @@ export async function pushNotification(
   uid: string,
   n: Pick<NotificationItem, "kind" | "title" | "body" | "href">,
 ): Promise<void> {
-  fbOrThrow();
+  const fb = fbOrThrow();
   const id = `n_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-  await setDoc(doc(notifCol(uid), id), scrub({ ...n, id, userId: uid, read: false, createdAt: Date.now() }));
-  void bumpActivity(uid, "notifications", 1);
+  const batch = writeBatch(fb.db);
+  batch.set(doc(notifCol(uid), id), scrub({ ...n, id, userId: uid, read: false, createdAt: Date.now() }));
+  batch.update(userRef(uid), { "activity.notifications": increment(1) });
+  await batch.commit();
 }
 
 export async function markNotificationRead(uid: string, id: string): Promise<void> {

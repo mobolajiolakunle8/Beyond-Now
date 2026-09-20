@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AcctBtn, AcctField, AcctInput, AcctTextArea, Empty, PageTitle } from "@/account/ui";
 import { useUserStore } from "@/account/UserStore";
-import { markThreadRead, sendUserMessage, type ChatIdentity } from "@/lib/chat";
+import { markThreadRead, sendUserMessage } from "@/lib/chat";
 import { formatDate, formatDateTime, relativeTime } from "@/lib/media";
 import { useStore, useWa } from "@/lib/store";
 import {
@@ -227,21 +227,6 @@ export function MessagesPage() {
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  /**
-   * Who we post as. Falls back to the signed-in Auth user when the profile
-   * document is unavailable, so a blocked profile read can never disable the
-   * composer — being signed in is the only real requirement to send.
-   */
-  const identity: ChatIdentity | null = authedUser
-    ? {
-        uid: authedUser.uid,
-        name: profile?.name || authedUser.displayName || authedUser.email?.split("@")[0] || "Member",
-        email: profile?.email || authedUser.email || "",
-        avatarUrl: profile?.avatarUrl ?? "",
-      }
-    : null;
-  const suspended = profile?.status === "suspended";
-
   // Opening the page clears the unread badge.
   useEffect(() => {
     if (authedUser && unreadMessages > 0) void markThreadRead(authedUser.uid, "user").catch(() => undefined);
@@ -252,13 +237,17 @@ export function MessagesPage() {
   }, [messages.length]);
 
   const send = async () => {
-    if (busy || !text.trim()) return;
-    if (!identity) return setError("Your session expired. Please sign in again.");
-    if (suspended) return setError("This account is suspended, so new messages cannot be sent.");
+    if (!authedUser || busy || !text.trim()) return;
     setBusy(true);
     setError(null);
     try {
-      await sendUserMessage(identity, text);
+      const sender = {
+        uid: authedUser.uid,
+        name: profile?.name || authedUser.displayName || authedUser.email?.split("@")[0] || "Member",
+        email: profile?.email || authedUser.email || "",
+        avatarUrl: profile?.avatarUrl || "",
+      };
+      await sendUserMessage(sender, text);
       setText("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Your message could not be sent. Please try again.");
@@ -334,18 +323,17 @@ export function MessagesPage() {
                   void send();
                 }
               }}
-              placeholder={suspended ? "This account is suspended." : "Write to Beyond Now…"}
+              placeholder="Write to Beyond Now…"
               aria-label="Message"
-              disabled={suspended}
               className="max-h-32 min-h-[44px] flex-1 resize-y rounded-2xl border border-navy/15 bg-bone/30 px-4 py-2.5 text-[0.9rem] placeholder:text-charcoal/40 focus:border-navy focus:bg-white focus:outline-none"
             />
-            <AcctBtn type="submit" variant="primary" disabled={busy || !text.trim() || !identity || suspended}>
+            <AcctBtn type="submit" variant="primary" disabled={busy || !text.trim() || !authedUser}>
               {busy ? "Sending…" : "Send"}
             </AcctBtn>
           </div>
           {(error || syncError) && (
-            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
-              <span className="text-[0.8rem] leading-relaxed text-red-700">{error ?? syncError ?? ""}</span>
+            <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+              <span className="text-[0.8rem] text-red-700">{error ?? syncError ?? ""}</span>
               {syncError && !error && (
                 <button type="button" onClick={retrySync} className="shrink-0 font-display text-[0.78rem] font-semibold text-navy hover:underline">
                   Retry

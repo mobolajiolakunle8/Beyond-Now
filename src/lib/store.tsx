@@ -639,7 +639,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return { ok: true };
       }
       const fb = getFirebase();
-      if (!fb) return { ok: false, error: "Cannot reach Firebase right now. Please check your connection and try again." };
+      if (!fb) return { ok: false, error: "Firebase is not configured." };
       try {
         await signInWithEmailAndPassword(fb.auth, email.trim(), password);
         return { ok: true };

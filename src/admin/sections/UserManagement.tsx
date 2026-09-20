@@ -97,16 +97,16 @@ function Conversation({ uid, seed, className }: { uid: string; seed?: Pick<UserP
 
   const send = async () => {
     if (busy || !text.trim()) return;
-    if (!account?.uid) {
-      setError("Your administrator session expired. Please sign in again.");
-      return;
-    }
     setBusy(true);
     setError(null);
     try {
+      const fb = getFirebase();
+      const adminUid = fb?.auth.currentUser?.uid || account?.uid || "admin";
+      const adminName = fb?.auth.currentUser?.displayName || account?.name || "Beyond Now team";
+
       const target = thread ?? (seed ? await ensureThread(seed) : null);
       if (!target) throw new Error("This user has no conversation yet.");
-      await sendAdminMessage(target, text, { uid: account.uid, name: account.name });
+      await sendAdminMessage(target, text, { uid: adminUid, name: adminName });
       setText("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Message could not be sent.");
