@@ -61,17 +61,17 @@ firebase use default        # → beyond-now-14935 (from .firebaserc)
 
 ### Security rules (deploy first, and again whenever `*.rules` change)
 
-**Option A (Firebase Console - fastest):**
+**Option A (Firebase Console - fastest, takes 15 seconds):**
 1. Open [Firebase Console](https://console.firebase.google.com/) → project **beyond-now-14935**
-2. Go to **Firestore Database** → **Rules** tab
-3. Copy the entire contents of `firestore.rules` and paste it into the editor
+2. Go to **Build** → **Realtime Database** (`https://beyond-now-14935-default-rtdb.firebaseio.com/`) → **Rules** tab
+3. Copy the entire contents of `database.rules.json` and paste it into the editor
 4. Click **Publish** (active immediately!)
-5. (Optional) Go to **Storage** → **Rules** tab → paste `storage.rules` → **Publish**
+5. (Optional) In **Storage** → **Rules** tab → paste `storage.rules` → click **Publish**
 
 **Option B (Firebase CLI):**
 ```bash
 npm run deploy:rules
-# or: firebase deploy --only firestore:rules,storage
+# runs: firebase deploy --only database,firestore:rules,storage
 ```
 
 ### Website (Hosting)

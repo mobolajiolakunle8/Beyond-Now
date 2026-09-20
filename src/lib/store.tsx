@@ -515,7 +515,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       ok: adminOk,
       detail: adminOk
         ? undefined
-        : `Firestore rejected the write (${adminDetail ?? "unknown error"}). Deploy the security rules from this project (npm run deploy:rules) and sign in with ${ADMIN_EMAIL}.`,
+        : `Database rejected the write (${adminDetail ?? "unknown error"}). Publish database.rules.json in Firebase Console (Realtime Database -> Rules) and sign in with ${ADMIN_EMAIL}.`,
     });
 
     let readOk = false;
@@ -527,7 +527,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       id: "read",
       label: "Website content publicly readable",
       ok: readOk,
-      detail: readOk ? undefined : "firestore.rules grants public read access to site/main — deploy it (npm run deploy:rules).",
+      detail: readOk ? undefined : "Realtime Database rules grant public read access to /site/main — deploy them (npm run deploy:rules) or paste database.rules.json in Firebase Console.",
     });
 
     const healthy = Boolean(fb) && Boolean(user) && adminOk && readOk;

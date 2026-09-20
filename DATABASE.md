@@ -11,8 +11,11 @@ so the admin UI can display exactly what was stored.
 
 ## 1. Overview
 
+Database Endpoint:
+**`https://beyond-now-14935-default-rtdb.firebaseio.com/`**
+
 ```
-Cloud Firestore
+Firebase Realtime Database (RTDB)
 ├── site/main                      Live website content (CMS)
 ├── media/{mediaId}                Media library metadata
 ├── articles/{articleId}           Long-form articles for members
@@ -21,7 +24,8 @@ Cloud Firestore
 │   ├── saved/{itemId}             Bookmarked resources
 │   └── notifications/{itemId}     In-app notifications
 └── threads/{uid}                  One private conversation per member
-    └── messages/{messageId}       Chat messages
+    ├── meta                       Thread status & unread counts
+    └── messages/{messageId}       Realtime chat messages
 
 Cloud Storage
 ├── media/{mediaId}.{webp|png|jpg} CMS images

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { collection, deleteDoc, doc, limit, onSnapshot, orderBy, query, setDoc } from "firebase/firestore";
+import { onValue, push, ref, remove, set } from "firebase/database";
 import { AdminBtn, Card, ConfirmDialog, EmptyState, PageHeader, SearchInput, StatusBadge } from "@/admin/ui";
 import {
   ensureThread,
@@ -518,11 +518,24 @@ export function ArticlesAdmin() {
   useEffect(() => {
     const fb = getFirebase();
     if (!fb) return;
-    return onSnapshot(
-      query(collection(fb.db, "articles"), orderBy("updatedAt", "desc"), limit(200)),
-      (snap) => setArticles(snap.docs.map((d) => d.data() as Article)),
-      (err) => notify("error", firestoreErrorMessage(err)),
-    );
+    try {
+      return onValue(
+        ref(fb.rtdb, "articles"),
+        (snap) => {
+          if (snap.exists()) {
+            const all = snap.val() as Record<string, Article>;
+            const list = Object.values(all).sort((a, b) => b.updatedAt - a.updatedAt);
+            setArticles(list);
+          } else {
+            setArticles([]);
+          }
+        },
+        (err) => notify("error", firestoreErrorMessage(err)),
+      );
+    } catch (err) {
+      notify("error", firestoreErrorMessage(err));
+      return () => undefined;
+    }
   }, [notify]);
 
   const visible = useMemo(() => {
@@ -535,7 +548,7 @@ export function ArticlesAdmin() {
     if (!fb) return;
     if (!article.title.trim()) return notify("error", "An article needs a title.");
     const now = Date.now();
-    const id = article.id || doc(collection(fb.db, "articles")).id;
+    const id = article.id || push(ref(fb.rtdb, "articles")).key || `a_${now}`;
     const data: Article = {
       ...article,
       id,
@@ -547,7 +560,7 @@ export function ArticlesAdmin() {
       authorName: article.authorName || account?.name || "Beyond Now",
     };
     try {
-      await setDoc(doc(fb.db, "articles", id), data);
+      await set(ref(fb.rtdb, `articles/${id}`), data);
       setEditing(null);
       notify("success", "Article saved.");
     } catch (err) {
@@ -555,11 +568,11 @@ export function ArticlesAdmin() {
     }
   };
 
-  const remove = async (id: string) => {
+  const removeArticle = async (id: string) => {
     const fb = getFirebase();
     if (!fb) return;
     try {
-      await deleteDoc(doc(fb.db, "articles", id));
+      await remove(ref(fb.rtdb, `articles/${id}`));
       notify("info", "Article deleted.");
     } catch (err) {
       notify("error", firestoreErrorMessage(err));
@@ -608,7 +621,7 @@ export function ArticlesAdmin() {
         confirmLabel="Delete"
         body="It will be removed for all members immediately."
         onCancel={() => setConfirmDelete(null)}
-        onConfirm={() => confirmDelete && void remove(confirmDelete)}
+        onConfirm={() => confirmDelete && void removeArticle(confirmDelete)}
       />
     </div>
   );

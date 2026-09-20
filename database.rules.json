@@ -1,0 +1,35 @@
+{
+  "rules": {
+    ".read": "auth != null",
+    ".write": "auth != null",
+    "site": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "media": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "articles": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "admins": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "users": {
+      "$uid": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    "threads": {
+      ".read": "auth != null",
+      "$threadId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    }
+  }
+}

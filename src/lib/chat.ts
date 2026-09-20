@@ -1,23 +1,6 @@
-import {
-  collection,
-  doc,
-  getDoc,
-  increment,
-  limit,
-  onSnapshot,
-  orderBy,
-  query,
-  setDoc,
-  writeBatch,
-  type Unsubscribe,
-} from "firebase/firestore";
+import { get, onValue, push, ref, set, update, type Unsubscribe } from "firebase/database";
 import { firestoreErrorMessage, getFirebase } from "@/lib/firebase";
 import { pushNotification } from "@/lib/users";
-
-/**
- * Private messaging between a user and the Beyond Now team.
- * Stored at `threads/{uid}` where the thread id equals the member's uid.
- */
 
 export type ThreadStatus = "open" | "resolved";
 
@@ -47,23 +30,6 @@ export type Message = {
   createdAt: number;
 };
 
-const MAX_MESSAGE_LENGTH = 2000;
-const noop: Unsubscribe = () => undefined;
-
-function fbOrThrow() {
-  const fb = getFirebase();
-  if (!fb) throw new Error("Firebase is not configured.");
-  return fb;
-}
-
-const threadRef = (uid: string) => doc(fbOrThrow().db, "threads", uid);
-const messagesCol = (uid: string) => collection(fbOrThrow().db, "threads", uid, "messages");
-const messageId = () => `m_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-
-/* -------------------------------------------------------------------------- */
-/*                                  Threads                                   */
-/* -------------------------------------------------------------------------- */
-
 export type ParticipantInfo = {
   uid: string;
   name?: string;
@@ -71,14 +37,29 @@ export type ParticipantInfo = {
   avatarUrl?: string;
 };
 
-/** Creates the user's thread if it does not exist yet. Safe to call repeatedly. */
+const MAX_MESSAGE_LENGTH = 2000;
+const noop: Unsubscribe = () => undefined;
+
+function getRtdb() {
+  const fb = getFirebase();
+  if (!fb) throw new Error("Firebase is not configured.");
+  return fb.rtdb;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                  Threads                                   */
+/* -------------------------------------------------------------------------- */
+
 export async function ensureThread(info: ParticipantInfo): Promise<Thread> {
-  const ref = threadRef(info.uid);
+  const db = getRtdb();
+  const metaRef = ref(db, `threads/${info.uid}/meta`);
   try {
-    const snap = await getDoc(ref);
-    if (snap.exists()) return snap.data() as Thread;
+    const snap = await get(metaRef);
+    if (snap.exists()) {
+      return snap.val() as Thread;
+    }
   } catch {
-    // proceed to create if read was denied or doc absent
+    // If permission issue or offline, continue with local creation
   }
 
   const now = Date.now();
@@ -97,37 +78,107 @@ export async function ensureThread(info: ParticipantInfo): Promise<Thread> {
     createdAt: now,
     updatedAt: now,
   };
-  await setDoc(ref, thread, { merge: true });
+
+  try {
+    await set(metaRef, thread);
+  } catch {
+    // proceed gracefully
+  }
   return thread;
 }
 
-export function subscribeThread(uid: string, onChange: (thread: Thread | null) => void, onError?: (msg: string) => void): Unsubscribe {
-  if (!getFirebase()) return noop;
-  return onSnapshot(
-    threadRef(uid),
-    (snap) => onChange(snap.exists() ? (snap.data() as Thread) : null),
-    (err) => onError?.(firestoreErrorMessage(err)),
-  );
-}
-
-export function subscribeMessages(uid: string, onChange: (messages: Message[]) => void, onError?: (msg: string) => void): Unsubscribe {
-  if (!getFirebase()) return noop;
-  return onSnapshot(
-    query(messagesCol(uid), orderBy("createdAt", "asc"), limit(500)),
-    (snap) => onChange(snap.docs.map((d) => d.data() as Message)),
-    (err) => onError?.(firestoreErrorMessage(err)),
-  );
-}
-
-/** Admin: every thread, most recent activity first. */
-export function subscribeAllThreads(onChange: (threads: Thread[]) => void, onError?: (msg: string) => void): Unsubscribe {
+export function subscribeThread(
+  uid: string,
+  onChange: (thread: Thread | null) => void,
+  onError?: (msg: string) => void,
+): Unsubscribe {
   const fb = getFirebase();
   if (!fb) return noop;
-  return onSnapshot(
-    query(collection(fb.db, "threads"), orderBy("lastMessageAt", "desc"), limit(500)),
-    (snap) => onChange(snap.docs.map((d) => d.data() as Thread)),
-    (err) => onError?.(firestoreErrorMessage(err)),
-  );
+  try {
+    const metaRef = ref(fb.rtdb, `threads/${uid}/meta`);
+    return onValue(
+      metaRef,
+      (snap) => {
+        if (snap.exists()) {
+          onChange(snap.val() as Thread);
+        } else {
+          onChange(null);
+        }
+      },
+      (err) => {
+        onError?.(firestoreErrorMessage(err));
+      },
+    );
+  } catch (err) {
+    onError?.(firestoreErrorMessage(err));
+    return noop;
+  }
+}
+
+export function subscribeMessages(
+  uid: string,
+  onChange: (messages: Message[]) => void,
+  onError?: (msg: string) => void,
+): Unsubscribe {
+  const fb = getFirebase();
+  if (!fb) return noop;
+  try {
+    const msgsRef = ref(fb.rtdb, `threads/${uid}/messages`);
+    return onValue(
+      msgsRef,
+      (snap) => {
+        if (snap.exists()) {
+          const raw = snap.val() as Record<string, Message>;
+          const list = Object.values(raw).sort((a, b) => a.createdAt - b.createdAt);
+          onChange(list);
+        } else {
+          onChange([]);
+        }
+      },
+      (err) => {
+        onError?.(firestoreErrorMessage(err));
+      },
+    );
+  } catch (err) {
+    onError?.(firestoreErrorMessage(err));
+    return noop;
+  }
+}
+
+export function subscribeAllThreads(
+  onChange: (threads: Thread[]) => void,
+  onError?: (msg: string) => void,
+): Unsubscribe {
+  const fb = getFirebase();
+  if (!fb) return noop;
+  try {
+    const threadsRef = ref(fb.rtdb, "threads");
+    return onValue(
+      threadsRef,
+      (snap) => {
+        if (snap.exists()) {
+          const all = snap.val() as Record<string, { meta?: Thread }>;
+          const list: Thread[] = [];
+          for (const key of Object.keys(all)) {
+            const item = all[key];
+            if (item && item.meta) {
+              list.push(item.meta);
+            }
+          }
+          list.sort((a, b) => b.lastMessageAt - a.lastMessageAt);
+          onChange(list);
+        } else {
+          onChange([]);
+        }
+      },
+      (err) => {
+        onError?.(firestoreErrorMessage(err));
+      },
+    );
+  } catch (err) {
+    onError?.(firestoreErrorMessage(err));
+    return noop;
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -141,20 +192,21 @@ function cleanText(text: string): string {
   return trimmed;
 }
 
-/** User → Beyond Now. Increments the admin's unread counter and reopens the thread. */
 export async function sendUserMessage(info: ParticipantInfo, text: string): Promise<void> {
-  const fb = fbOrThrow();
+  const fb = getFirebase();
+  if (!fb) throw new Error("Firebase is not configured.");
   const user = fb.auth.currentUser;
   if (!user || user.uid !== info.uid) throw new Error("You are not signed in.");
-  const body = cleanText(text);
 
+  const body = cleanText(text);
   const now = Date.now();
   const senderName = info.name || user.displayName || user.email?.split("@")[0] || "Member";
   const senderEmail = info.email || user.email || "";
   const senderAvatar = info.avatarUrl || "";
 
+  const msgKey = push(ref(fb.rtdb, `threads/${user.uid}/messages`)).key || `m_${now}`;
   const message: Message = {
-    id: messageId(),
+    id: msgKey,
     threadId: user.uid,
     senderUid: user.uid,
     senderRole: "user",
@@ -163,60 +215,79 @@ export async function sendUserMessage(info: ParticipantInfo, text: string): Prom
     createdAt: now,
   };
 
-  const batch = writeBatch(fb.db);
-  batch.set(doc(messagesCol(user.uid), message.id), message);
-  batch.set(
-    threadRef(user.uid),
-    {
-      id: user.uid,
-      userId: user.uid,
-      userName: senderName,
-      userEmail: senderEmail,
-      userAvatar: senderAvatar,
-      lastMessage: body.slice(0, 200),
-      lastSender: "user",
-      lastMessageAt: now,
-      unreadByAdmin: increment(1),
-      status: "open",
-      updatedAt: now,
-    },
-    { merge: true },
-  );
-  // Safely record user activity without failing if user document is pending
-  batch.set(doc(fb.db, "users", user.uid), { updatedAt: now }, { merge: true });
-  await batch.commit();
+  // Get current unreadByAdmin count
+  let currentUnread = 0;
+  try {
+    const metaSnap = await get(ref(fb.rtdb, `threads/${user.uid}/meta/unreadByAdmin`));
+    if (metaSnap.exists()) {
+      currentUnread = Number(metaSnap.val()) || 0;
+    }
+  } catch {
+    // proceed
+  }
+
+  const threadMeta: Thread = {
+    id: user.uid,
+    userId: user.uid,
+    userName: senderName,
+    userEmail: senderEmail,
+    userAvatar: senderAvatar,
+    lastMessage: body.slice(0, 200),
+    lastSender: "user",
+    lastMessageAt: now,
+    unreadByUser: 0,
+    unreadByAdmin: currentUnread + 1,
+    status: "open",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await set(ref(fb.rtdb, `threads/${user.uid}/messages/${msgKey}`), message);
+  await update(ref(fb.rtdb, `threads/${user.uid}/meta`), threadMeta);
+  await update(ref(fb.rtdb, `users/${user.uid}`), { lastSeenAt: now }).catch(() => undefined);
 }
 
-/** Beyond Now → user. Increments the user's unread counter and drops an in-app notification. */
-export async function sendAdminMessage(thread: Thread, text: string, admin: { uid: string; name: string }): Promise<void> {
-  const fb = fbOrThrow();
+export async function sendAdminMessage(
+  thread: Thread,
+  text: string,
+  admin: { uid: string; name: string },
+): Promise<void> {
+  const fb = getFirebase();
+  if (!fb) throw new Error("Firebase is not configured.");
+
   const body = cleanText(text);
   const now = Date.now();
+  const msgKey = push(ref(fb.rtdb, `threads/${thread.id}/messages`)).key || `m_${now}`;
+
   const message: Message = {
-    id: messageId(),
+    id: msgKey,
     threadId: thread.id,
     senderUid: admin.uid,
     senderRole: "admin",
-    senderName: admin.name || "Beyond Now",
+    senderName: admin.name || "Beyond Now team",
     text: body,
     createdAt: now,
   };
 
-  const batch = writeBatch(fb.db);
-  batch.set(doc(messagesCol(thread.id), message.id), message);
-  batch.set(
-    threadRef(thread.id),
-    {
-      lastMessage: body.slice(0, 200),
-      lastSender: "admin",
-      lastMessageAt: now,
-      unreadByUser: increment(1),
-      status: "open",
-      updatedAt: now,
-    },
-    { merge: true },
-  );
-  await batch.commit();
+  let currentUnread = 0;
+  try {
+    const unreadSnap = await get(ref(fb.rtdb, `threads/${thread.id}/meta/unreadByUser`));
+    if (unreadSnap.exists()) {
+      currentUnread = Number(unreadSnap.val()) || 0;
+    }
+  } catch {
+    // proceed
+  }
+
+  await set(ref(fb.rtdb, `threads/${thread.id}/messages/${msgKey}`), message);
+  await update(ref(fb.rtdb, `threads/${thread.id}/meta`), {
+    lastMessage: body.slice(0, 200),
+    lastSender: "admin",
+    lastMessageAt: now,
+    unreadByUser: currentUnread + 1,
+    status: "open",
+    updatedAt: now,
+  });
 
   await pushNotification(thread.userId, {
     kind: "message",
@@ -234,12 +305,19 @@ export async function markThreadRead(uid: string, role: "user" | "admin"): Promi
   const fb = getFirebase();
   if (!fb) return;
   try {
-    await setDoc(threadRef(uid), role === "user" ? { unreadByUser: 0 } : { unreadByAdmin: 0 }, { merge: true });
+    const patch = role === "user" ? { unreadByUser: 0 } : { unreadByAdmin: 0 };
+    await update(ref(fb.rtdb, `threads/${uid}/meta`), patch);
   } catch {
-    /* ignore read receipt error */
+    // ignore
   }
 }
 
 export async function setThreadStatus(uid: string, status: ThreadStatus): Promise<void> {
-  await setDoc(threadRef(uid), { status, updatedAt: Date.now() }, { merge: true });
+  const fb = getFirebase();
+  if (!fb) return;
+  try {
+    await update(ref(fb.rtdb, `threads/${uid}/meta`), { status, updatedAt: Date.now() });
+  } catch {
+    // ignore
+  }
 }

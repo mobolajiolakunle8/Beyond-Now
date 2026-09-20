@@ -10,21 +10,7 @@ import {
   type User,
   type UserCredential,
 } from "firebase/auth";
-import {
-  collection,
-  deleteDoc,
-  doc,
-  getDoc,
-  getDocs,
-  increment,
-  onSnapshot,
-  orderBy,
-  query,
-  setDoc,
-  updateDoc,
-  writeBatch,
-  type Unsubscribe,
-} from "firebase/firestore";
+import { get, onValue, push, ref, remove, set, update, type Unsubscribe } from "firebase/database";
 import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from "firebase/storage";
 import { ADMIN_EMAIL, authErrorMessage, firestoreErrorMessage, getFirebase } from "@/lib/firebase";
 import { processImageFile } from "@/lib/media";
@@ -59,7 +45,6 @@ export type UserProfile = {
 export type SavedItem = {
   id: string;
   userId: string;
-  /** Stable reference into the CMS, e.g. `resource:<trackId>:<itemId>` */
   ref: string;
   title: string;
   description: string;
@@ -84,27 +69,13 @@ export type AdminRecord = {
   grantedAt: number;
 };
 
-/* -------------------------------------------------------------------------- */
-/*                                  Helpers                                   */
-/* -------------------------------------------------------------------------- */
+const noop: Unsubscribe = () => undefined;
 
-function fbOrThrow() {
+function getRtdb() {
   const fb = getFirebase();
   if (!fb) throw new Error("Firebase is not configured.");
-  return fb;
+  return fb.rtdb;
 }
-
-/** Firestore rejects `undefined`; strip it before writing. */
-function scrub<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
-
-const userRef = (uid: string) => doc(fbOrThrow().db, "users", uid);
-const adminRef = (uid: string) => doc(fbOrThrow().db, "admins", uid);
-const savedCol = (uid: string) => collection(fbOrThrow().db, "users", uid, "saved");
-const notifCol = (uid: string) => collection(fbOrThrow().db, "users", uid, "notifications");
-
-const noop: Unsubscribe = () => undefined;
 
 export function buildProfile(uid: string, email: string, name: string): UserProfile {
   const now = Date.now();
@@ -133,12 +104,14 @@ function displayNameFor(user: User): string {
 /* -------------------------------------------------------------------------- */
 
 export async function signUp(input: { email: string; password: string; name: string }): Promise<UserCredential> {
-  const fb = fbOrThrow();
+  const fb = getFirebase();
+  if (!fb) throw new Error("Firebase is not configured.");
   try {
     const cred = await createUserWithEmailAndPassword(fb.auth, input.email.trim(), input.password);
     const name = input.name.trim() || displayNameFor(cred.user);
     if (input.name.trim()) await fbUpdateProfile(cred.user, { displayName: name });
-    await setDoc(userRef(cred.user.uid), buildProfile(cred.user.uid, cred.user.email ?? input.email, name));
+    const profile = buildProfile(cred.user.uid, cred.user.email ?? input.email, name);
+    await set(ref(fb.rtdb, `users/${cred.user.uid}`), profile).catch(() => undefined);
     return cred;
   } catch (err) {
     throw new Error(authErrorMessage(err));
@@ -146,7 +119,8 @@ export async function signUp(input: { email: string; password: string; name: str
 }
 
 export async function signIn(input: { email: string; password: string }): Promise<UserCredential> {
-  const fb = fbOrThrow();
+  const fb = getFirebase();
+  if (!fb) throw new Error("Firebase is not configured.");
   try {
     return await signInWithEmailAndPassword(fb.auth, input.email.trim(), input.password);
   } catch (err) {
@@ -155,7 +129,8 @@ export async function signIn(input: { email: string; password: string }): Promis
 }
 
 export async function sendReset(email: string): Promise<void> {
-  const fb = fbOrThrow();
+  const fb = getFirebase();
+  if (!fb) throw new Error("Firebase is not configured.");
   try {
     await sendPasswordResetEmail(fb.auth, email.trim());
   } catch (err) {
@@ -168,64 +143,59 @@ export async function signOutCurrent(): Promise<void> {
   if (fb) await signOut(fb.auth);
 }
 
-/**
- * Client-side admin detection. Mirrors the server rule exactly:
- * custom claim → root admin email → `admins/{uid}` allow-list document.
- * The Firestore/Storage rules are the source of truth; this only shapes the UI.
- */
 export async function resolveIsAdmin(user: User): Promise<boolean> {
+  if (user.email && user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) return true;
   try {
     const token = await user.getIdTokenResult();
     if (token.claims.isAdmin === true) return true;
   } catch {
-    /* token unavailable offline — fall through */
+    // offline
   }
-  if (user.email && user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) return true;
   try {
-    return (await getDoc(adminRef(user.uid))).exists();
+    const fb = getFirebase();
+    if (fb) {
+      const snap = await get(ref(fb.rtdb, `admins/${user.uid}`));
+      if (snap.exists()) return true;
+    }
   } catch {
-    return false;
+    // fallback
   }
+  return false;
 }
 
-/**
- * Writes (or refreshes) the `admins/{uid}` allow-list record. This is the
- * bootstrap path the root administrator uses to unlock Cloud access — the
- * security rules permit it only for `{ROOT ADMIN EMAIL}`. Members calling it
- * receive `permission-denied`, which the caller turns into remediation copy.
- */
 export async function writeAdminAllowList(uid: string, email: string, grantedBy = "bootstrap"): Promise<void> {
+  const fb = getFirebase();
+  if (!fb) return;
   const record: AdminRecord = { uid, email, grantedBy, grantedAt: Date.now() };
-  await setDoc(adminRef(uid), record, { merge: true });
+  await set(ref(fb.rtdb, `admins/${uid}`), record).catch(() => undefined);
 }
 
-/**
- * Guarantees the signed-in user has a profile document (covers accounts that
- * were created before the profile seed existed) and, for administrators,
- * that their role and allow-list record are in place.
- */
 export async function ensureUserRecords(user: User, isAdmin: boolean): Promise<UserProfile> {
-  const ref = userRef(user.uid);
-  const snap = await getDoc(ref);
+  const fb = getFirebase();
+  const db = getRtdb();
+  const userNode = ref(db, `users/${user.uid}`);
   let profile: UserProfile;
 
-  if (!snap.exists()) {
+  try {
+    const snap = await get(userNode);
+    if (!snap.exists()) {
+      profile = buildProfile(user.uid, user.email ?? "", displayNameFor(user));
+      if (isAdmin) profile.role = "admin";
+      await set(userNode, profile).catch(() => undefined);
+    } else {
+      profile = snap.val() as UserProfile;
+      const patch: Partial<UserProfile> = { lastSeenAt: Date.now() };
+      if (isAdmin && profile.role !== "admin") patch.role = "admin";
+      await update(userNode, patch).catch(() => undefined);
+      profile = { ...profile, ...patch };
+    }
+  } catch {
     profile = buildProfile(user.uid, user.email ?? "", displayNameFor(user));
     if (isAdmin) profile.role = "admin";
-    await setDoc(ref, profile);
-  } else {
-    profile = snap.data() as UserProfile;
-    const patch: Partial<UserProfile> = { lastSeenAt: Date.now() };
-    if (isAdmin && profile.role !== "admin") patch.role = "admin";
-    await updateDoc(ref, patch);
-    profile = { ...profile, ...patch };
   }
 
-  if (isAdmin) {
-    const admin = await getDoc(adminRef(user.uid));
-    if (!admin.exists()) {
-      await writeAdminAllowList(user.uid, user.email ?? "", "bootstrap");
-    }
+  if (isAdmin && fb) {
+    await writeAdminAllowList(user.uid, user.email ?? "").catch(() => undefined);
   }
 
   return profile;
@@ -236,33 +206,58 @@ export async function ensureUserRecords(user: User, isAdmin: boolean): Promise<U
 /* -------------------------------------------------------------------------- */
 
 export async function fetchProfile(uid: string): Promise<UserProfile | null> {
-  if (!getFirebase()) return null;
-  const snap = await getDoc(userRef(uid));
-  return snap.exists() ? (snap.data() as UserProfile) : null;
+  const fb = getFirebase();
+  if (!fb) return null;
+  try {
+    const snap = await get(ref(fb.rtdb, `users/${uid}`));
+    return snap.exists() ? (snap.val() as UserProfile) : null;
+  } catch {
+    return null;
+  }
 }
 
-export function subscribeProfile(uid: string, onChange: (p: UserProfile | null) => void, onError?: (msg: string) => void): Unsubscribe {
-  if (!getFirebase()) return noop;
-  return onSnapshot(
-    userRef(uid),
-    (snap) => onChange(snap.exists() ? (snap.data() as UserProfile) : null),
-    (err) => onError?.(firestoreErrorMessage(err)),
-  );
+export function subscribeProfile(
+  uid: string,
+  onChange: (p: UserProfile | null) => void,
+  onError?: (msg: string) => void,
+): Unsubscribe {
+  const fb = getFirebase();
+  if (!fb) return noop;
+  try {
+    return onValue(
+      ref(fb.rtdb, `users/${uid}`),
+      (snap) => {
+        if (snap.exists()) {
+          onChange(snap.val() as UserProfile);
+        } else {
+          onChange(null);
+        }
+      },
+      (err) => {
+        onError?.(firestoreErrorMessage(err));
+      },
+    );
+  } catch (err) {
+    onError?.(firestoreErrorMessage(err));
+    return noop;
+  }
 }
 
 export async function updateOwnProfile(
   uid: string,
   patch: Partial<Pick<UserProfile, "name" | "bio" | "avatarUrl" | "preferences">>,
 ): Promise<void> {
-  const fb = fbOrThrow();
-  await updateDoc(userRef(uid), { ...scrub(patch), updatedAt: Date.now() });
-  if (patch.name !== undefined && fb.auth.currentUser) {
-    await fbUpdateProfile(fb.auth.currentUser, { displayName: patch.name });
+  const db = getRtdb();
+  const fb = getFirebase();
+  await update(ref(db, `users/${uid}`), { ...patch, updatedAt: Date.now() });
+  if (patch.name !== undefined && fb?.auth.currentUser) {
+    await fbUpdateProfile(fb.auth.currentUser, { displayName: patch.name }).catch(() => undefined);
   }
 }
 
 export async function changeOwnPassword(current: string, next: string): Promise<void> {
-  const fb = fbOrThrow();
+  const fb = getFirebase();
+  if (!fb) throw new Error("Firebase is not configured.");
   const user = fb.auth.currentUser;
   if (!user?.email) throw new Error("No signed-in user.");
   try {
@@ -280,7 +275,8 @@ export async function changeOwnPassword(current: string, next: string): Promise<
 const AVATAR_EXTS = ["webp", "png", "jpg", "jpeg"] as const;
 
 export async function uploadAvatar(uid: string, file: File): Promise<string> {
-  const fb = fbOrThrow();
+  const fb = getFirebase();
+  if (!fb) throw new Error("Firebase is not configured.");
   if (!/^image\/(jpe?g|png|webp)$/.test(file.type)) throw new Error("Profile picture must be JPG, PNG or WebP.");
   if (file.size > 5 * 1024 * 1024) throw new Error("Profile picture must be under 5 MB.");
 
@@ -299,7 +295,8 @@ export async function uploadAvatar(uid: string, file: File): Promise<string> {
 }
 
 export async function removeAvatar(uid: string): Promise<void> {
-  const fb = fbOrThrow();
+  const fb = getFirebase();
+  if (!fb) return;
   await Promise.all(
     AVATAR_EXTS.map((ext) => deleteObject(storageRef(fb.storage, `avatars/${uid}/avatar.${ext}`)).catch(() => undefined)),
   );
@@ -310,107 +307,179 @@ export async function removeAvatar(uid: string): Promise<void> {
 /*                              Admin: user list                              */
 /* -------------------------------------------------------------------------- */
 
-export function subscribeAllUsers(onChange: (users: UserProfile[]) => void, onError?: (msg: string) => void): Unsubscribe {
+export function subscribeAllUsers(
+  onChange: (users: UserProfile[]) => void,
+  onError?: (msg: string) => void,
+): Unsubscribe {
   const fb = getFirebase();
   if (!fb) return noop;
-  return onSnapshot(
-    query(collection(fb.db, "users"), orderBy("createdAt", "desc")),
-    (snap) => onChange(snap.docs.map((d) => d.data() as UserProfile)),
-    (err) => onError?.(firestoreErrorMessage(err)),
-  );
+  try {
+    return onValue(
+      ref(fb.rtdb, "users"),
+      (snap) => {
+        if (snap.exists()) {
+          const raw = snap.val() as Record<string, UserProfile>;
+          const list = Object.values(raw).sort((a, b) => b.createdAt - a.createdAt);
+          onChange(list);
+        } else {
+          onChange([]);
+        }
+      },
+      (err) => onError?.(firestoreErrorMessage(err)),
+    );
+  } catch (err) {
+    onError?.(firestoreErrorMessage(err));
+    return noop;
+  }
 }
 
 export async function adminSetUserStatus(uid: string, status: UserStatus): Promise<void> {
-  await updateDoc(userRef(uid), { status, updatedAt: Date.now() });
+  const db = getRtdb();
+  await update(ref(db, `users/${uid}`), { status, updatedAt: Date.now() });
 }
 
-/** Promotes or demotes a user. Keeps `users/{uid}.role` and `admins/{uid}` in sync. */
 export async function adminSetUserRole(uid: string, role: UserRole, grantedBy: string): Promise<void> {
-  const fb = fbOrThrow();
-  const batch = writeBatch(fb.db);
-  batch.update(userRef(uid), { role, updatedAt: Date.now() });
+  const db = getRtdb();
+  await update(ref(db, `users/${uid}`), { role, updatedAt: Date.now() });
   if (role === "admin") {
-    const target = await getDoc(userRef(uid));
-    const email = target.exists() ? (target.data() as UserProfile).email : "";
-    const record: AdminRecord = { uid, email, grantedBy, grantedAt: Date.now() };
-    batch.set(adminRef(uid), record);
+    const target = await fetchProfile(uid);
+    const email = target?.email || "";
+    await writeAdminAllowList(uid, email, grantedBy);
   } else {
-    batch.delete(adminRef(uid));
+    await remove(ref(db, `admins/${uid}`)).catch(() => undefined);
   }
-  await batch.commit();
 }
 
 /* -------------------------------------------------------------------------- */
 /*                                Saved items                                 */
 /* -------------------------------------------------------------------------- */
 
-export function subscribeSaved(uid: string, onChange: (items: SavedItem[]) => void, onError?: (msg: string) => void): Unsubscribe {
-  if (!getFirebase()) return noop;
-  return onSnapshot(
-    query(savedCol(uid), orderBy("savedAt", "desc")),
-    (snap) => onChange(snap.docs.map((d) => d.data() as SavedItem)),
-    (err) => onError?.(firestoreErrorMessage(err)),
-  );
+export function subscribeSaved(
+  uid: string,
+  onChange: (items: SavedItem[]) => void,
+  onError?: (msg: string) => void,
+): Unsubscribe {
+  const fb = getFirebase();
+  if (!fb) return noop;
+  try {
+    return onValue(
+      ref(fb.rtdb, `users/${uid}/saved`),
+      (snap) => {
+        if (snap.exists()) {
+          const raw = snap.val() as Record<string, SavedItem>;
+          const list = Object.values(raw).sort((a, b) => b.savedAt - a.savedAt);
+          onChange(list);
+        } else {
+          onChange([]);
+        }
+      },
+      (err) => onError?.(firestoreErrorMessage(err)),
+    );
+  } catch (err) {
+    onError?.(firestoreErrorMessage(err));
+    return noop;
+  }
 }
 
-/** Idempotent: saving the same resource twice keeps a single record. */
-export async function saveResource(uid: string, item: Pick<SavedItem, "ref" | "title" | "description">): Promise<void> {
-  const fb = fbOrThrow();
+export async function saveResource(
+  uid: string,
+  item: Pick<SavedItem, "ref" | "title" | "description">,
+): Promise<void> {
+  const db = getRtdb();
   const id = item.ref.replace(/[^a-z0-9_-]/gi, "_");
-  const batch = writeBatch(fb.db);
-  batch.set(doc(savedCol(uid), id), scrub({ ...item, id, userId: uid, savedAt: Date.now() }));
-  batch.update(userRef(uid), { "activity.saved": increment(1), updatedAt: Date.now() });
-  await batch.commit();
+  const savedItem: SavedItem = { ...item, id, userId: uid, savedAt: Date.now() };
+
+  await set(ref(db, `users/${uid}/saved/${id}`), savedItem);
+  let currentSaved = 0;
+  try {
+    const actSnap = await get(ref(db, `users/${uid}/activity/saved`));
+    if (actSnap.exists()) currentSaved = Number(actSnap.val()) || 0;
+  } catch {
+    // proceed
+  }
+  await update(ref(db, `users/${uid}/activity`), { saved: currentSaved + 1 }).catch(() => undefined);
 }
 
 export async function removeSaved(uid: string, id: string): Promise<void> {
-  const fb = fbOrThrow();
-  const batch = writeBatch(fb.db);
-  batch.delete(doc(savedCol(uid), id));
-  batch.update(userRef(uid), { "activity.saved": increment(-1), updatedAt: Date.now() });
-  await batch.commit();
+  const db = getRtdb();
+  await remove(ref(db, `users/${uid}/saved/${id}`));
+  let currentSaved = 0;
+  try {
+    const actSnap = await get(ref(db, `users/${uid}/activity/saved`));
+    if (actSnap.exists()) currentSaved = Number(actSnap.val()) || 0;
+  } catch {
+    // proceed
+  }
+  await update(ref(db, `users/${uid}/activity`), { saved: Math.max(0, currentSaved - 1) }).catch(() => undefined);
 }
 
 /* -------------------------------------------------------------------------- */
 /*                               Notifications                                */
 /* -------------------------------------------------------------------------- */
 
-export function subscribeNotifications(uid: string, onChange: (items: NotificationItem[]) => void, onError?: (msg: string) => void): Unsubscribe {
-  if (!getFirebase()) return noop;
-  return onSnapshot(
-    query(notifCol(uid), orderBy("createdAt", "desc")),
-    (snap) => onChange(snap.docs.map((d) => d.data() as NotificationItem)),
-    (err) => onError?.(firestoreErrorMessage(err)),
-  );
+export function subscribeNotifications(
+  uid: string,
+  onChange: (items: NotificationItem[]) => void,
+  onError?: (msg: string) => void,
+): Unsubscribe {
+  const fb = getFirebase();
+  if (!fb) return noop;
+  try {
+    return onValue(
+      ref(fb.rtdb, `users/${uid}/notifications`),
+      (snap) => {
+        if (snap.exists()) {
+          const raw = snap.val() as Record<string, NotificationItem>;
+          const list = Object.values(raw).sort((a, b) => b.createdAt - a.createdAt);
+          onChange(list);
+        } else {
+          onChange([]);
+        }
+      },
+      (err) => onError?.(firestoreErrorMessage(err)),
+    );
+  } catch (err) {
+    onError?.(firestoreErrorMessage(err));
+    return noop;
+  }
 }
 
 export async function pushNotification(
   uid: string,
   n: Pick<NotificationItem, "kind" | "title" | "body" | "href">,
 ): Promise<void> {
-  const fb = fbOrThrow();
-  const id = `n_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-  const batch = writeBatch(fb.db);
-  batch.set(doc(notifCol(uid), id), scrub({ ...n, id, userId: uid, read: false, createdAt: Date.now() }));
-  batch.update(userRef(uid), { "activity.notifications": increment(1) });
-  await batch.commit();
+  const db = getRtdb();
+  const id = push(ref(db, `users/${uid}/notifications`)).key || `n_${Date.now()}`;
+  const notification: NotificationItem = { ...n, id, userId: uid, read: false, createdAt: Date.now() };
+
+  await set(ref(db, `users/${uid}/notifications/${id}`), notification);
 }
 
 export async function markNotificationRead(uid: string, id: string): Promise<void> {
-  await updateDoc(doc(notifCol(uid), id), { read: true });
+  const db = getRtdb();
+  await update(ref(db, `users/${uid}/notifications/${id}`), { read: true });
 }
 
 export async function markAllNotificationsRead(uid: string): Promise<void> {
-  const fb = fbOrThrow();
-  const snap = await getDocs(notifCol(uid));
-  if (snap.empty) return;
-  const batch = writeBatch(fb.db);
-  snap.docs.forEach((d) => batch.update(d.ref, { read: true }));
-  await batch.commit();
+  const db = getRtdb();
+  try {
+    const snap = await get(ref(db, `users/${uid}/notifications`));
+    if (snap.exists()) {
+      const all = snap.val() as Record<string, NotificationItem>;
+      const patch: Record<string, boolean> = {};
+      for (const k of Object.keys(all)) {
+        patch[`${k}/read`] = true;
+      }
+      await update(ref(db, `users/${uid}/notifications`), patch);
+    }
+  } catch {
+    // ignore
+  }
 }
 
 export async function deleteNotification(uid: string, id: string): Promise<void> {
-  await deleteDoc(doc(notifCol(uid), id));
+  const db = getRtdb();
+  await remove(ref(db, `users/${uid}/notifications/${id}`));
 }
 
 export async function sendWelcome(uid: string, name: string): Promise<void> {

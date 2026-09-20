@@ -126,19 +126,18 @@ export function Overview({ go }: { go: (route: string) => void }) {
               {rulesLocked ? (
                 <>
                   <p>
-                    Your Firestore database is still in <strong>locked (deny-all) mode</strong> — the security rules
-                    have not been published. This is a one-time step; no code change fixes it.
+                    Your database (<strong>https://beyond-now-14935-default-rtdb.firebaseio.com/</strong>) requires
+                    rules to be published in Firebase Console.
                   </p>
                   <ol className="mt-3 list-decimal space-y-1.5 pl-5">
                     <li>
-                      In a terminal in this project run{" "}
-                      <code className="rounded bg-bone px-1.5 py-0.5 font-semibold text-navy">npm run deploy:rules</code>
-                      , or
+                      In the <strong>Firebase Console → Build → Realtime Database → Rules</strong> tab, paste the
+                      contents of <code className="rounded bg-bone px-1.5 py-0.5 font-semibold text-navy">database.rules.json</code> and
+                      click <strong>Publish</strong>.
                     </li>
                     <li>
-                      In the <strong>Firebase Console → Firestore Database → Rules</strong>, paste the contents of{" "}
-                      <code className="rounded bg-bone px-1.5 py-0.5 font-semibold text-navy">firestore.rules</code> and
-                      click <strong>Publish</strong>.
+                      Or from a terminal in this project, run{" "}
+                      <code className="rounded bg-bone px-1.5 py-0.5 font-semibold text-navy">npm run deploy:rules</code>.
                     </li>
                   </ol>
                   <p className="mt-3">Then press <strong>Run cloud check</strong> — everything recovers automatically, no refresh needed.</p>

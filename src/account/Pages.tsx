@@ -51,6 +51,7 @@ function Notice({ tone, children }: { tone: "success" | "error"; children: strin
 
 export function DashboardPage() {
   const { profile, saved, notifications, messages, unreadNotifications, unreadMessages, syncError, retrySync } = useUserStore();
+  const [dismissError, setDismissError] = useState(false);
   const last = messages[messages.length - 1];
 
   return (
@@ -60,10 +61,20 @@ export function DashboardPage() {
         description="A snapshot of your account and the latest from the Beyond Now team."
       />
 
-      {syncError && (
+      {syncError && !dismissError && (
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3">
           <p className="text-[0.85rem] font-medium text-red-700">{syncError}</p>
-          <AcctBtn variant="outline" size="sm" onClick={retrySync}>Retry</AcctBtn>
+          <div className="flex items-center gap-2">
+            <AcctBtn variant="outline" size="sm" onClick={retrySync}>Retry</AcctBtn>
+            <button
+              type="button"
+              onClick={() => setDismissError(true)}
+              aria-label="Dismiss error"
+              className="text-xs text-charcoal/45 hover:text-charcoal px-1"
+            >
+              ✕
+            </button>
+          </div>
         </div>
       )}
 
@@ -226,7 +237,9 @@ export function MessagesPage() {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dismissError, setDismissError] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Opening the page clears the unread badge.
   useEffect(() => {
@@ -238,9 +251,15 @@ export function MessagesPage() {
   }, [messages.length]);
 
   const send = async () => {
-    if (!authedUser || busy || !text.trim()) return;
+    const trimmed = text.trim();
+    if (!trimmed) {
+      textareaRef.current?.focus();
+      return;
+    }
+    if (!authedUser || busy) return;
     setBusy(true);
     setError(null);
+    setDismissError(false);
     try {
       const sender = {
         uid: authedUser.uid,
@@ -248,7 +267,7 @@ export function MessagesPage() {
         email: profile?.email || authedUser.email || "",
         avatarUrl: profile?.avatarUrl || "",
       };
-      await sendUserMessage(sender, text);
+      await sendUserMessage(sender, trimmed);
       setText("");
     } catch (err) {
       setError(firestoreErrorMessage(err));
@@ -315,6 +334,7 @@ export function MessagesPage() {
         >
           <div className="flex items-end gap-2">
             <textarea
+              ref={textareaRef}
               rows={1}
               value={text}
               onChange={(e) => setText(e.target.value)}
@@ -328,18 +348,28 @@ export function MessagesPage() {
               aria-label="Message"
               className="max-h-32 min-h-[44px] flex-1 resize-y rounded-2xl border border-navy/15 bg-bone/30 px-4 py-2.5 text-[0.9rem] placeholder:text-charcoal/40 focus:border-navy focus:bg-white focus:outline-none"
             />
-            <AcctBtn type="submit" variant="primary" disabled={busy || !text.trim() || !authedUser}>
+            <AcctBtn type="submit" variant="primary" disabled={busy || !authedUser}>
               {busy ? "Sending…" : "Send"}
             </AcctBtn>
           </div>
-          {(error || syncError) && (
+          {(error || (syncError && !dismissError)) && (
             <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
               <span className="text-[0.8rem] text-red-700">{error ?? syncError ?? ""}</span>
-              {syncError && !error && (
-                <button type="button" onClick={retrySync} className="shrink-0 font-display text-[0.78rem] font-semibold text-navy hover:underline">
-                  Retry
+              <div className="flex items-center gap-2">
+                {syncError && !error && (
+                  <button type="button" onClick={retrySync} className="shrink-0 font-display text-[0.78rem] font-semibold text-navy hover:underline">
+                    Retry
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setDismissError(true)}
+                  aria-label="Dismiss error"
+                  className="text-xs text-charcoal/45 hover:text-charcoal"
+                >
+                  ✕
                 </button>
-              )}
+              </div>
             </div>
           )}
           <p className="mt-2 text-[0.7rem] text-charcoal/45">

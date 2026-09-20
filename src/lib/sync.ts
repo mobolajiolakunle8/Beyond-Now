@@ -1,57 +1,26 @@
-import {
-  collection,
-  deleteDoc,
-  doc,
-  getDoc,
-  getDocs,
-  onSnapshot,
-  setDoc,
-  type Unsubscribe,
-} from "firebase/firestore";
-import {
-  deleteObject,
-  getDownloadURL,
-  ref,
-  uploadBytes,
-  type UploadMetadata,
-} from "firebase/storage";
+import { get, onValue, ref, remove, set, update, type Unsubscribe } from "firebase/database";
+import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes, type UploadMetadata } from "firebase/storage";
 import type { MediaItem, SiteContent } from "@/lib/content";
 import { uid } from "@/lib/content";
 import { firestoreErrorMessage, getFirebase } from "@/lib/firebase";
 import { processImageFile } from "@/lib/media";
 
-/**
- * The live website document. Every admin edit is written here directly —
- * there is no separate draft; what is stored is what visitors see.
- */
 export type SiteDocument = {
   published: SiteContent;
   updatedAt: string;
   updatedBy: string;
+  rev: number;
 };
 
-const SITE_DOC = "main";
-const SITE_COLLECTION = "site";
-const MEDIA_COLLECTION = "media";
 const STORAGE_PREFIX = "media";
+const noop: Unsubscribe = () => undefined;
 
 export type SyncStatus = "local" | "connecting" | "synced" | "offline" | "error";
 
-/** Strip undefined values — Firestore rejects them. */
-function scrub<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
-
-function siteRef() {
+function getRtdb() {
   const fb = getFirebase();
-  if (!fb) return null;
-  return doc(fb.db, SITE_COLLECTION, SITE_DOC);
-}
-
-function mediaCol() {
-  const fb = getFirebase();
-  if (!fb) return null;
-  return collection(fb.db, MEDIA_COLLECTION);
+  if (!fb) throw new Error("Firebase is not configured.");
+  return fb.rtdb;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -59,53 +28,52 @@ function mediaCol() {
 /* -------------------------------------------------------------------------- */
 
 export async function pullSiteDocument(): Promise<SiteDocument | null> {
-  const refDoc = siteRef();
-  if (!refDoc) return null;
+  const fb = getFirebase();
+  if (!fb) return null;
   try {
-    const snap = await getDoc(refDoc);
+    const snap = await get(ref(fb.rtdb, "site/main"));
     if (!snap.exists()) return null;
-    return snap.data() as SiteDocument;
+    return snap.val() as SiteDocument;
   } catch (err) {
     throw new Error(firestoreErrorMessage(err));
   }
 }
 
-/** Full-document write (not a merge) so fields removed from the schema are purged. */
-export async function pushSiteDocument(published: SiteContent, updatedBy: string): Promise<string> {
-  const refDoc = siteRef();
-  if (!refDoc) throw new Error("Firebase is not configured.");
+export async function pushSiteDocument(published: SiteContent, updatedBy: string, rev?: number): Promise<string> {
+  const db = getRtdb();
   const updatedAt = new Date().toISOString();
   try {
-    const payload: SiteDocument = { published, updatedAt, updatedBy };
-    await setDoc(refDoc, scrub(payload));
+    const payload: SiteDocument = { published, updatedAt, updatedBy, rev: rev ?? 1 };
+    await set(ref(db, "site/main"), payload);
     return updatedAt;
   } catch (err) {
     throw new Error(firestoreErrorMessage(err));
   }
 }
 
-/**
- * Real-time listener for the site document.
- * Fires immediately with the current snapshot, then on every remote change.
- */
 export function subscribeSiteDocument(
   onData: (doc: SiteDocument | null) => void,
   onError?: (message: string) => void,
 ): Unsubscribe {
-  const refDoc = siteRef();
-  if (!refDoc) {
+  const fb = getFirebase();
+  if (!fb) {
     onData(null);
-    return () => undefined;
+    return noop;
   }
-  return onSnapshot(
-    refDoc,
-    (snap) => {
-      onData(snap.exists() ? (snap.data() as SiteDocument) : null);
-    },
-    (err) => {
-      onError?.(firestoreErrorMessage(err));
-    },
-  );
+  try {
+    return onValue(
+      ref(fb.rtdb, "site/main"),
+      (snap) => {
+        onData(snap.exists() ? (snap.val() as SiteDocument) : null);
+      },
+      (err) => {
+        onError?.(firestoreErrorMessage(err));
+      },
+    );
+  } catch (err) {
+    onError?.(firestoreErrorMessage(err));
+    return noop;
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -113,12 +81,10 @@ export function subscribeSiteDocument(
 /* -------------------------------------------------------------------------- */
 
 export type CloudMedia = Omit<MediaItem, "dataUrl"> & {
-  /** Public download URL from Firebase Storage. */
   url: string;
   storagePath: string;
 };
 
-/** Convert a cloud media record into the shape the rest of the app expects. */
 export function cloudToMediaItem(item: CloudMedia): MediaItem {
   return {
     id: item.id,
@@ -133,12 +99,14 @@ export function cloudToMediaItem(item: CloudMedia): MediaItem {
 }
 
 export async function pullMediaLibrary(): Promise<MediaItem[]> {
-  const col = mediaCol();
-  if (!col) return [];
+  const fb = getFirebase();
+  if (!fb) return [];
   try {
-    const snap = await getDocs(col);
-    return snap.docs
-      .map((d) => cloudToMediaItem(d.data() as CloudMedia))
+    const snap = await get(ref(fb.rtdb, "media"));
+    if (!snap.exists()) return [];
+    const all = snap.val() as Record<string, CloudMedia>;
+    return Object.values(all)
+      .map(cloudToMediaItem)
       .sort((a, b) => (a.uploadedAt < b.uploadedAt ? 1 : -1));
   } catch (err) {
     throw new Error(firestoreErrorMessage(err));
@@ -149,40 +117,44 @@ export function subscribeMediaLibrary(
   onData: (items: MediaItem[]) => void,
   onError?: (message: string) => void,
 ): Unsubscribe {
-  const col = mediaCol();
-  if (!col) {
+  const fb = getFirebase();
+  if (!fb) {
     onData([]);
-    return () => undefined;
+    return noop;
   }
-  return onSnapshot(
-    col,
-    (snap) => {
-      const items = snap.docs
-        .map((d) => cloudToMediaItem(d.data() as CloudMedia))
-        .sort((a, b) => (a.uploadedAt < b.uploadedAt ? 1 : -1));
-      onData(items);
-    },
-    (err) => onError?.(firestoreErrorMessage(err)),
-  );
+  try {
+    return onValue(
+      ref(fb.rtdb, "media"),
+      (snap) => {
+        if (!snap.exists()) {
+          onData([]);
+          return;
+        }
+        const all = snap.val() as Record<string, CloudMedia>;
+        const items = Object.values(all)
+          .map(cloudToMediaItem)
+          .sort((a, b) => (a.uploadedAt < b.uploadedAt ? 1 : -1));
+        onData(items);
+      },
+      (err) => onError?.(firestoreErrorMessage(err)),
+    );
+  } catch (err) {
+    onError?.(firestoreErrorMessage(err));
+    return noop;
+  }
 }
 
-/**
- * Compresses the file client-side, uploads the blob to Storage, and writes
- * metadata to Firestore. Returns a MediaItem whose `dataUrl` is the public URL.
- */
 export async function uploadMediaToCloud(file: File): Promise<MediaItem> {
   const fb = getFirebase();
   if (!fb) throw new Error("Firebase is not configured.");
 
-  // Reuse the existing compressor — it returns a data URL we convert to a Blob.
   const processed = await processImageFile(file);
   const blob = await (await fetch(processed.dataUrl)).blob();
 
   const id = processed.id || uid();
-  const ext =
-    blob.type === "image/png" ? "png" : blob.type === "image/webp" ? "webp" : "jpg";
-  const storagePath = `${STORAGE_PREFIX}/${id}.${ext}`;
-  const storageRef = ref(fb.storage, storagePath);
+  const ext = blob.type === "image/png" ? "png" : blob.type === "image/webp" ? "webp" : "jpg";
+  const path = `${STORAGE_PREFIX}/${id}.${ext}`;
+  const sRef = storageRef(fb.storage, path);
 
   const meta: UploadMetadata = {
     contentType: blob.type || file.type || "image/jpeg",
@@ -193,14 +165,14 @@ export async function uploadMediaToCloud(file: File): Promise<MediaItem> {
     },
   };
 
-  await uploadBytes(storageRef, blob, meta);
-  const url = await getDownloadURL(storageRef);
+  await uploadBytes(sRef, blob, meta);
+  const url = await getDownloadURL(sRef);
 
   const cloud: CloudMedia = {
     id,
     name: file.name,
     url,
-    storagePath,
+    storagePath: path,
     width: processed.width,
     height: processed.height,
     size: blob.size,
@@ -208,7 +180,7 @@ export async function uploadMediaToCloud(file: File): Promise<MediaItem> {
     uploadedAt: new Date().toISOString(),
   };
 
-  await setDoc(doc(fb.db, MEDIA_COLLECTION, id), scrub(cloud));
+  await set(ref(fb.rtdb, `media/${id}`), cloud);
   return cloudToMediaItem(cloud);
 }
 
@@ -216,82 +188,70 @@ export async function deleteMediaFromCloud(item: MediaItem & { storagePath?: str
   const fb = getFirebase();
   if (!fb) throw new Error("Firebase is not configured.");
 
-  // Best-effort Storage delete. Metadata always goes.
   try {
-    // Prefer an explicit path; otherwise derive the common pattern from the id.
-    const path =
-      item.storagePath ||
-      // Try common extensions
-      `${STORAGE_PREFIX}/${item.id}.webp`;
-    await deleteObject(ref(fb.storage, path)).catch(async () => {
-      // Fallbacks if the extension guess was wrong
+    const path = item.storagePath || `${STORAGE_PREFIX}/${item.id}.webp`;
+    await deleteObject(storageRef(fb.storage, path)).catch(async () => {
       for (const ext of ["png", "jpg", "jpeg", "webp"]) {
         try {
-          await deleteObject(ref(fb.storage, `${STORAGE_PREFIX}/${item.id}.${ext}`));
+          await deleteObject(storageRef(fb.storage, `${STORAGE_PREFIX}/${item.id}.${ext}`));
           break;
         } catch {
-          /* try next */
+          // ignore
         }
       }
     });
   } catch {
-    /* file may already be gone */
+    // proceed
   }
 
-  await deleteDoc(doc(fb.db, MEDIA_COLLECTION, item.id));
+  await remove(ref(fb.rtdb, `media/${item.id}`));
 }
 
 export async function renameMediaInCloud(id: string, name: string): Promise<void> {
-  const fb = getFirebase();
-  if (!fb) throw new Error("Firebase is not configured.");
-  await setDoc(doc(fb.db, MEDIA_COLLECTION, id), { name }, { merge: true });
+  const db = getRtdb();
+  await update(ref(db, `media/${id}`), { name });
 }
 
-/**
- * Replaces the binary for an existing media id (keeps the same id so content
- * references of the form `media:<id>` keep working).
- */
 export async function replaceMediaInCloud(id: string, file: File): Promise<MediaItem> {
   const fb = getFirebase();
   if (!fb) throw new Error("Firebase is not configured.");
 
-  // Remove any existing object for this id, then upload under the same id.
   try {
     for (const ext of ["webp", "png", "jpg", "jpeg"]) {
       try {
-        await deleteObject(ref(fb.storage, `${STORAGE_PREFIX}/${id}.${ext}`));
+        await deleteObject(storageRef(fb.storage, `${STORAGE_PREFIX}/${id}.${ext}`));
       } catch {
-        /* ok */
+        // ignore
       }
     }
   } catch {
-    /* ok */
+    // ignore
   }
 
   const processed = await processImageFile(file);
-  // Force the preserved id
   processed.id = id;
   const blob = await (await fetch(processed.dataUrl)).blob();
-  const ext =
-    blob.type === "image/png" ? "png" : blob.type === "image/webp" ? "webp" : "jpg";
-  const storagePath = `${STORAGE_PREFIX}/${id}.${ext}`;
-  await uploadBytes(ref(fb.storage, storagePath), blob, {
+  const ext = blob.type === "image/png" ? "png" : blob.type === "image/webp" ? "webp" : "jpg";
+  const path = `${STORAGE_PREFIX}/${id}.${ext}`;
+
+  await uploadBytes(storageRef(fb.storage, path), blob, {
     contentType: blob.type || file.type,
     customMetadata: { originalName: file.name },
   });
-  const url = await getDownloadURL(ref(fb.storage, storagePath));
+  const url = await getDownloadURL(storageRef(fb.storage, path));
 
   const cloud: CloudMedia = {
     id,
     name: file.name,
     url,
-    storagePath,
+    storagePath: path,
     width: processed.width,
     height: processed.height,
     size: blob.size,
     type: blob.type || file.type,
     uploadedAt: new Date().toISOString(),
   };
-  await setDoc(doc(fb.db, MEDIA_COLLECTION, id), scrub(cloud));
+
+  await set(ref(fb.rtdb, `media/${id}`), cloud);
   return cloudToMediaItem(cloud);
 }
