@@ -7,7 +7,8 @@ import { Method } from "@/components/Method";
 import { Nav } from "@/components/Nav";
 import { Pillars } from "@/components/Pillars";
 import { Stories } from "@/components/Stories";
-import { useContent } from "@/lib/store";
+import { useContent, useStore } from "@/lib/store";
+import { cn } from "@/utils/cn";
 
 /** Applies the SEO fields managed in the dashboard to the live document. */
 function useSeo(enabled: boolean) {
@@ -44,7 +45,10 @@ function useSeo(enabled: boolean) {
 }
 
 export function LandingPage({ applySeo = true }: { applySeo?: boolean }) {
+  const { cloudEnabled, syncStatus, resync } = useStore();
   useSeo(applySeo);
+
+  const degraded = cloudEnabled && (syncStatus === "offline" || syncStatus === "error");
 
   return (
     <div className="min-h-screen bg-bone">
@@ -64,6 +68,20 @@ export function LandingPage({ applySeo = true }: { applySeo?: boolean }) {
         <FinalCTA />
       </main>
       <Footer />
+
+      {degraded && (
+        <button
+          type="button"
+          onClick={() => void resync()}
+          className="fixed bottom-4 left-4 z-40 inline-flex items-center gap-2 rounded-full border border-navy/15 bg-white/95 px-4 py-2.5 font-display text-[0.8rem] font-semibold text-navy shadow-lift backdrop-blur transition-all hover:-translate-y-0.5 hover:border-teal hover:text-teal-ink"
+        >
+          <span
+            aria-hidden="true"
+            className={cn("h-2 w-2 rounded-full", syncStatus === "error" ? "bg-red-500" : "bg-charcoal/40")}
+          />
+          {syncStatus === "error" ? "Couldn't refresh — tap to retry" : "Offline — showing saved version"}
+        </button>
+      )}
     </div>
   );
 }

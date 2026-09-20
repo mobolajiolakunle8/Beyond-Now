@@ -21,6 +21,7 @@ import {
 import { DEFAULT_CONTENT, cloneContent, mergeContent, type MediaItem, type SiteContent } from "@/lib/content";
 import { ADMIN_EMAIL, ADMIN_NAME, authErrorMessage, getFirebase, isFirebaseConfigured } from "@/lib/firebase";
 import { processImageFile } from "@/lib/media";
+import { onReconnect, resilientSubscribe } from "@/lib/live";
 import {
   deleteMediaFromCloud,
   pullMediaLibrary,
@@ -103,6 +104,8 @@ type StoreValue = {
   ready: boolean;
   updateContent: (recipe: (content: SiteContent) => SiteContent) => void;
   resetContent: () => Promise<void>;
+  /** Forces a fresh pull from the cloud and heals dead listeners. */
+  resync: () => Promise<void>;
   uploadMedia: (files: FileList | File[]) => Promise<MediaItem[]>;
   deleteMedia: (id: string) => Promise<void>;
   replaceMedia: (id: string, file: File) => Promise<void>;
@@ -143,8 +146,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const isAdminRef = useRef(false);
   isAdminRef.current = isAdmin;
   const cloudWriteTimer = useRef<number>(0);
-  /** Set while a cloud snapshot is being applied so it is not echoed back. */
-  const applyingRemote = useRef(false);
+  /** Highest site-document revision this browser knows about. */
+  const revRef = useRef(0);
+  /** `updatedAt` of our own last successful push (echo detection). */
+  const ownPushStampRef = useRef("");
+  const convergeTimer = useRef<number>(0);
 
   /* ---------- toasts ---------- */
 
@@ -216,7 +222,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   /* ---------- content + media sync ---------- */
 
   const applyRemote = useCallback((published: unknown, stamp: string | undefined) => {
-    applyingRemote.current = true;
     const next = mergeContent(DEFAULT_CONTENT, published);
     setContent(next);
     writeLocal(K.content, next);
@@ -224,10 +229,49 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setUpdatedAt(stamp);
       writeLocal(K.updatedAt, stamp);
     }
-    window.setTimeout(() => {
-      applyingRemote.current = false;
-    }, 0);
   }, []);
+
+  /**
+   * One-shot pull of the live document + media, applied when newer than what
+   * we hold. Runs at boot, whenever the tab becomes active again, and on
+   * manual resync — so a tab left open for hours never serves stale content.
+   */
+  const pullOnce = useCallback(async () => {
+    if (!cloudEnabled) return;
+    try {
+      const [site, library] = await Promise.all([
+        withTimeout(pullSiteDocument(), BOOT_TIMEOUT_MS),
+        withTimeout(pullMediaLibrary(), BOOT_TIMEOUT_MS),
+      ]);
+      if (site) {
+        const remoteRev = site.rev ?? 0;
+        revRef.current = Math.max(revRef.current, remoteRev);
+        // Pending local edits will push shortly and win; otherwise adopt it.
+        if (!cloudWriteTimer.current) applyRemote(site.published, site.updatedAt);
+      }
+      if (library.length) {
+        setMedia(library);
+        writeLocal(K.media, library);
+      }
+      setSyncStatus("synced");
+      setSyncError(null);
+    } catch (err) {
+      setSyncStatus("offline");
+      setSyncError(
+        err instanceof Error && err.message === "timeout"
+          ? "Firebase took too long. Showing cached content."
+          : err instanceof Error
+            ? err.message
+            : "Could not reach Firebase.",
+      );
+    }
+  }, [applyRemote, cloudEnabled]);
+
+  const resync = useCallback(async () => {
+    if (!cloudEnabled) return;
+    setSyncStatus("connecting");
+    await pullOnce();
+  }, [cloudEnabled, pullOnce]);
 
   useEffect(() => {
     if (!cloudEnabled) {
@@ -236,66 +280,66 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
     let cancelled = false;
 
-    (async () => {
-      try {
-        const [site, library] = await Promise.all([
-          withTimeout(pullSiteDocument(), BOOT_TIMEOUT_MS),
-          withTimeout(pullMediaLibrary(), BOOT_TIMEOUT_MS),
-        ]);
-        if (cancelled) return;
-        if (site) applyRemote(site.published, site.updatedAt);
-        if (library.length) {
-          setMedia(library);
-          writeLocal(K.media, library);
-        }
-        setSyncStatus("synced");
-        setSyncError(null);
-      } catch (err) {
-        if (cancelled) return;
-        setSyncStatus("offline");
-        setSyncError(err instanceof Error && err.message === "timeout" ? "Firebase took too long. Showing cached content." : err instanceof Error ? err.message : "Could not reach Firebase.");
-      } finally {
-        if (!cancelled) setContentReady(true);
-      }
-    })();
+    void pullOnce().finally(() => {
+      if (!cancelled) setContentReady(true);
+    });
 
-    const unsubSite = subscribeSiteDocument(
-      (remote) => {
-        if (!remote) return;
-        // Skip echoes of our own pending write; the debounced push will land shortly.
-        if (cloudWriteTimer.current) return;
-        applyRemote(remote.published, remote.updatedAt);
-        setSyncStatus("synced");
-        setSyncError(null);
-      },
-      (message) => {
-        setSyncStatus("error");
-        setSyncError(message);
-      },
+    /*
+     * Live listeners. A Firestore listener that errors (e.g. the page loaded
+     * before the security rules were deployed) would otherwise stay dead and
+     * the tab would silently freeze on old content. `resilientSubscribe`
+     * reopens it with backoff, so every browser converges on the live
+     * document without a refresh.
+     */
+    const unsubSite = resilientSubscribe(({ failed, alive }) =>
+      subscribeSiteDocument(
+        (remote) => {
+          alive();
+          if (!remote) return;
+          const remoteRev = remote.rev ?? 0;
+          if (remoteRev < revRef.current) return; // stale snapshot
+          if (remoteRev === revRef.current) {
+            // Same revision: normally our own push echoing back. If it came
+            // from a different writer at the same revision (rare race), pull
+            // shortly so all browsers settle on Firestore's canonical copy.
+            if (remote.updatedAt !== ownPushStampRef.current && !cloudWriteTimer.current) {
+              window.clearTimeout(convergeTimer.current);
+              convergeTimer.current = window.setTimeout(() => void pullOnce(), 1200);
+            }
+            return;
+          }
+          revRef.current = remoteRev;
+          if (cloudWriteTimer.current) return; // our in-flight edit wins
+          applyRemote(remote.published, remote.updatedAt);
+          setSyncStatus("synced");
+          setSyncError(null);
+        },
+        failed,
+      ),
     );
-    const unsubMedia = subscribeMediaLibrary(
-      (items) => {
-        setMedia(items);
-        writeLocal(K.media, items);
-      },
-      (message) => {
-        setSyncStatus("error");
-        setSyncError(message);
-      },
+    const unsubMedia = resilientSubscribe(({ failed, alive }) =>
+      subscribeMediaLibrary(
+        (items) => {
+          alive();
+          setMedia(items);
+          writeLocal(K.media, items);
+        },
+        failed,
+      ),
     );
 
-    const goOnline = () => setSyncStatus((s) => (s === "offline" ? "synced" : s));
-    const goOffline = () => setSyncStatus("offline");
-    window.addEventListener("online", goOnline);
+    const stopReconnect = onReconnect(() => void pullOnce());
+    const goOffline = () => setSyncStatus((s) => (s === "synced" || s === "connecting" ? "offline" : s));
     window.addEventListener("offline", goOffline);
     return () => {
       cancelled = true;
       unsubSite();
       unsubMedia();
-      window.removeEventListener("online", goOnline);
+      stopReconnect();
+      window.clearTimeout(convergeTimer.current);
       window.removeEventListener("offline", goOffline);
     };
-  }, [cloudEnabled, applyRemote]);
+  }, [cloudEnabled, applyRemote, pullOnce]);
 
   // Keep other tabs of the same browser in sync (local mode and cache).
   useEffect(() => {
@@ -321,7 +365,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return;
     }
     try {
-      const stamp = await pushSiteDocument(snapshot, userRef.current?.uid ?? "admin");
+      const rev = revRef.current + 1;
+      const stamp = await pushSiteDocument(snapshot, userRef.current?.uid ?? "admin", rev);
+      revRef.current = rev;
+      ownPushStampRef.current = stamp;
       setUpdatedAt(stamp);
       writeLocal(K.updatedAt, stamp);
       setSyncStatus("synced");
@@ -460,7 +507,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(
     async (email: string, password: string) => {
+      if (!cloudEnabled) {
+        const ok = email.trim().toLowerCase() === ADMIN_EMAIL.toLowerCase() && password.length >= 8;
+        if (!ok) return { ok: false, error: "Those details do not match an administrator account." };
+        setAuthed(true);
+        setIsAdmin(true);
+        setAccount({ email: ADMIN_EMAIL, name: ADMIN_NAME });
+        try {
+          sessionStorage.setItem(K.session, "active");
+        } catch {
+          /* ignore */
+        }
+        notify("success", "Signed in (local mode).");
+        return { ok: true };
+      }
       const fb = getFirebase();
+      if (!fb) return { ok: false, error: "Firebase is not configured." };
       try {
         await signInWithEmailAndPassword(fb.auth, email.trim(), password);
         return { ok: true };
@@ -468,7 +530,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return { ok: false, error: authErrorMessage(err) };
       }
     },
-    [],
+    [cloudEnabled, notify],
   );
 
   const logout = useCallback(async () => {
@@ -538,6 +600,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       ready: authReady && contentReady,
       updateContent,
       resetContent,
+      resync,
       uploadMedia,
       deleteMedia,
       replaceMedia,
@@ -552,7 +615,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }),
     [
       content, media, updatedAt, saving, account, isAuthed, isAdmin, cloudEnabled, syncStatus, syncError,
-      authReady, contentReady, updateContent, resetContent, uploadMedia, deleteMedia, replaceMedia,
+      authReady, contentReady, updateContent, resetContent, resync, uploadMedia, deleteMedia, replaceMedia,
       renameMedia, login, logout, updateAccount, changePassword, toasts, notify, dismissToast,
     ],
   );

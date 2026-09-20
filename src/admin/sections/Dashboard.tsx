@@ -45,16 +45,33 @@ export function Overview({ go }: { go: (route: string) => void }) {
       <div
         className={cn(
           "mb-5 flex flex-wrap items-center justify-between gap-4 rounded-2xl border px-5 py-4",
-          syncStatus === "error" ? "border-red-200 bg-red-50" : saving ? "border-sun bg-sun/10" : "border-teal/30 bg-teal/8",
+          syncStatus === "error"
+            ? "border-red-200 bg-red-50"
+            : saving
+              ? "border-sun bg-sun/10"
+              : "border-teal/30 bg-teal/8",
         )}
       >
         <div className="flex items-center gap-3">
-          <span className={cn("flex h-10 w-10 items-center justify-center rounded-xl text-lg", saving ? "bg-sun/30" : "bg-teal/20")}>
-            {saving ? "…" : "✓"}
+          <span
+            className={cn(
+              "flex h-10 w-10 items-center justify-center rounded-xl text-lg font-bold",
+              syncStatus === "error"
+                ? "bg-red-100 text-red-700"
+                : saving
+                  ? "bg-sun/30 text-[#8a6500]"
+                  : "bg-teal/20 text-teal-ink",
+            )}
+          >
+            {syncStatus === "error" ? "!" : saving ? "…" : "✓"}
           </span>
           <div>
             <p className="font-display text-[0.95rem] font-bold text-navy">
-              {saving ? "Publishing your latest change…" : syncStatus === "error" ? "Your last change could not be synced" : "Website is live and up to date"}
+              {saving
+                ? "Publishing your latest change…"
+                : syncStatus === "error"
+                  ? "Your last change could not be synced"
+                  : "Website is live and up to date"}
             </p>
             <p className="text-[0.8rem] text-charcoal/60">
               {syncError ?? (updatedAt ? `Last updated ${relativeTime(updatedAt)}` : "No edits yet")}

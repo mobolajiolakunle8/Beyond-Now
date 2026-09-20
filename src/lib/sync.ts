@@ -23,11 +23,16 @@ import { processImageFile } from "@/lib/media";
 /**
  * The live website document. Every admin edit is written here directly —
  * there is no separate draft; what is stored is what visitors see.
+ *
+ * `rev` is a monotonically increasing version number maintained by the
+ * clients (each write uses `max(rev seen) + 1`). Browsers compare revisions,
+ * not clocks, so sync is correct even with skewed or equal timestamps.
  */
 export type SiteDocument = {
   published: SiteContent;
   updatedAt: string;
   updatedBy: string;
+  rev: number;
 };
 
 const SITE_DOC = "main";
@@ -44,11 +49,13 @@ function scrub<T>(value: T): T {
 
 function siteRef() {
   const fb = getFirebase();
+  if (!fb) return null;
   return doc(fb.db, SITE_COLLECTION, SITE_DOC);
 }
 
 function mediaCol() {
   const fb = getFirebase();
+  if (!fb) return null;
   return collection(fb.db, MEDIA_COLLECTION);
 }
 
@@ -69,11 +76,12 @@ export async function pullSiteDocument(): Promise<SiteDocument | null> {
 }
 
 /** Full-document write (not a merge) so fields removed from the schema are purged. */
-export async function pushSiteDocument(published: SiteContent, updatedBy: string): Promise<string> {
+export async function pushSiteDocument(published: SiteContent, updatedBy: string, rev: number): Promise<string> {
   const refDoc = siteRef();
+  if (!refDoc) throw new Error("Firebase is not configured.");
   const updatedAt = new Date().toISOString();
   try {
-    const payload: SiteDocument = { published, updatedAt, updatedBy };
+    const payload: SiteDocument = { published, updatedAt, updatedBy, rev };
     await setDoc(refDoc, scrub(payload));
     return updatedAt;
   } catch (err) {
@@ -90,6 +98,10 @@ export function subscribeSiteDocument(
   onError?: (message: string) => void,
 ): Unsubscribe {
   const refDoc = siteRef();
+  if (!refDoc) {
+    onData(null);
+    return () => undefined;
+  }
   return onSnapshot(
     refDoc,
     (snap) => {
@@ -165,6 +177,7 @@ export function subscribeMediaLibrary(
  */
 export async function uploadMediaToCloud(file: File): Promise<MediaItem> {
   const fb = getFirebase();
+  if (!fb) throw new Error("Firebase is not configured.");
 
   // Reuse the existing compressor — it returns a data URL we convert to a Blob.
   const processed = await processImageFile(file);
@@ -206,6 +219,7 @@ export async function uploadMediaToCloud(file: File): Promise<MediaItem> {
 
 export async function deleteMediaFromCloud(item: MediaItem & { storagePath?: string }): Promise<void> {
   const fb = getFirebase();
+  if (!fb) throw new Error("Firebase is not configured.");
 
   // Best-effort Storage delete. Metadata always goes.
   try {
@@ -234,6 +248,7 @@ export async function deleteMediaFromCloud(item: MediaItem & { storagePath?: str
 
 export async function renameMediaInCloud(id: string, name: string): Promise<void> {
   const fb = getFirebase();
+  if (!fb) throw new Error("Firebase is not configured.");
   await setDoc(doc(fb.db, MEDIA_COLLECTION, id), { name }, { merge: true });
 }
 
@@ -243,6 +258,7 @@ export async function renameMediaInCloud(id: string, name: string): Promise<void
  */
 export async function replaceMediaInCloud(id: string, file: File): Promise<MediaItem> {
   const fb = getFirebase();
+  if (!fb) throw new Error("Firebase is not configured.");
 
   // Remove any existing object for this id, then upload under the same id.
   try {

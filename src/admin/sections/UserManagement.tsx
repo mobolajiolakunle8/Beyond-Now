@@ -13,6 +13,7 @@ import {
   type Thread,
 } from "@/lib/chat";
 import { getFirebase } from "@/lib/firebase";
+import { resilientSubscribe } from "@/lib/live";
 import { formatDate, formatDateTime, relativeTime } from "@/lib/media";
 import { useStore } from "@/lib/store";
 import { adminSetUserRole, adminSetUserStatus, type UserProfile } from "@/lib/users";
@@ -72,8 +73,32 @@ function Conversation({ uid, seed, className }: { uid: string; seed?: Pick<UserP
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const unsubThread = subscribeThread(uid, setThread, setError);
-    const unsubMessages = subscribeMessages(uid, setMessages, setError);
+    const unsubThread = resilientSubscribe(({ failed, alive }) =>
+      subscribeThread(
+        uid,
+        (t) => {
+          alive();
+          setThread(t);
+        },
+        (msg) => {
+          setError(msg);
+          failed(msg);
+        },
+      ),
+    );
+    const unsubMessages = resilientSubscribe(({ failed, alive }) =>
+      subscribeMessages(
+        uid,
+        (m) => {
+          alive();
+          setMessages(m);
+        },
+        (msg) => {
+          setError(msg);
+          failed(msg);
+        },
+      ),
+    );
     return () => {
       unsubThread();
       unsubMessages();
@@ -178,7 +203,22 @@ export function UsersAdmin() {
   const [filter, setFilter] = useState<"all" | "active" | "suspended" | "admin">("all");
   const [selected, setSelected] = useState<UserProfile | null>(null);
 
-  useEffect(() => subscribeAllUsers(setUsers, setError), []);
+  useEffect(
+    () =>
+      resilientSubscribe(({ failed, alive }) =>
+        subscribeAllUsers(
+          (list) => {
+            alive();
+            setUsers(list);
+          },
+          (msg) => {
+            setError(msg);
+            failed(msg);
+          },
+        ),
+      ),
+    [],
+  );
 
   const visible = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -389,7 +429,22 @@ export function MessagesAdmin() {
   const [filter, setFilter] = useState<"all" | "unread" | "open" | "resolved">("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  useEffect(() => subscribeAllThreads(setThreads, setError), []);
+  useEffect(
+    () =>
+      resilientSubscribe(({ failed, alive }) =>
+        subscribeAllThreads(
+          (list) => {
+            alive();
+            setThreads(list);
+          },
+          (msg) => {
+            setError(msg);
+            failed(msg);
+          },
+        ),
+      ),
+    [],
+  );
 
   const visible = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -493,10 +548,18 @@ export function ArticlesAdmin() {
   useEffect(() => {
     const fb = getFirebase();
     if (!fb) return;
-    return onSnapshot(
-      query(collection(fb.db, "articles"), orderBy("updatedAt", "desc"), limit(200)),
-      (snap) => setArticles(snap.docs.map((d) => d.data() as Article)),
-      (err) => notify("error", err.message),
+    return resilientSubscribe(({ failed, alive }) =>
+      onSnapshot(
+        query(collection(fb.db, "articles"), orderBy("updatedAt", "desc"), limit(200)),
+        (snap) => {
+          alive();
+          setArticles(snap.docs.map((d) => d.data() as Article));
+        },
+        (err) => {
+          notify("error", err.message);
+          failed(err.message);
+        },
+      ),
     );
   }, [notify]);
 

@@ -79,6 +79,7 @@ Single document. Public read, admin write. Written **in full** on every save.
 | `published` | `SiteContent` | The entire website copy, images and settings (see §4) |
 | `updatedAt` | string (ISO) | When the last edit was saved |
 | `updatedBy` | string | `uid` of the administrator who saved |
+| `rev` | number | Monotonic version counter (see §7). Each write uses `max(rev seen) + 1` |
 
 ### 3.2 `media/{mediaId}`
 
@@ -259,7 +260,28 @@ R = read, C = create, U = update, D = delete.
 
 ---
 
-## 7. Data lifecycle
+## 7. Realtime sync engine
+
+Every open browser — the public site, the admin dashboard, and each member's
+account — keeps itself in sync through Firestore `onSnapshot` listeners plus a
+defensive pull, so no refresh is ever needed.
+
+| Mechanism | What it does |
+|---|---|
+| **Live listener** | Applies any newer document the instant it lands |
+| **Revision guard** | Compares `rev`, not clocks. `rev < local` → stale (skip); `rev == local` → echo of our own push (skip, or converge on a tie); `rev > local` → apply |
+| **Resilient subscribe** | A listener that dies (e.g. the page loaded before security rules were deployed) is reopened with exponential backoff (1.5s → 30s) until healthy — the tab self-heals without a reload |
+| **Reconnect pull** | On tab focus / visibility / coming back online, forces a fresh pull so a tab left open for hours never serves stale content |
+| **Debounced auto-publish** | An admin edit is pushed ~1s after typing stops, and flushed on `pagehide` if the tab closes mid-edit |
+| **Manual resync** | A **Retry** control (admin header) and an offline pill (public site) force an immediate pull |
+
+Conflict policy is last-write-wins on the whole document: if two admins edit at
+once, the higher `rev` (the later push) is canonical and every browser converges
+on it within ~1.2s.
+
+---
+
+## 8. Data lifecycle
 
 | Event | Writes |
 |---|---|
@@ -279,7 +301,7 @@ R = read, C = create, U = update, D = delete.
 
 ---
 
-## 8. Indexes
+## 9. Indexes
 
 All queries use a single ordered field, which Firestore indexes automatically:
 
@@ -296,7 +318,7 @@ All queries use a single ordered field, which Firestore indexes automatically:
 
 ---
 
-## 9. Privacy & retention
+## 10. Privacy & retention
 
 - Messages are private to the member and administrators; no other member can
   read them (enforced by path-based rules, not by client filtering).
@@ -310,7 +332,7 @@ All queries use a single ordered field, which Firestore indexes automatically:
 
 ---
 
-## 10. Example documents
+## 11. Example documents
 
 ```jsonc
 // users/9fX2…

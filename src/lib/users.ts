@@ -89,7 +89,9 @@ export type AdminRecord = {
 /* -------------------------------------------------------------------------- */
 
 function fbOrThrow() {
-  return getFirebase();
+  const fb = getFirebase();
+  if (!fb) throw new Error("Firebase is not configured.");
+  return fb;
 }
 
 /** Firestore rejects `undefined`; strip it before writing. */
@@ -192,36 +194,46 @@ export async function resolveIsAdmin(user: User): Promise<boolean> {
  * that their role and allow-list record are in place.
  */
 export async function ensureUserRecords(user: User, isAdmin: boolean): Promise<UserProfile> {
+  const fallback = buildProfile(user.uid, user.email ?? "", displayNameFor(user));
+  if (isAdmin) fallback.role = "admin";
+
   const ref = userRef(user.uid);
-  const snap = await getDoc(ref);
-  let profile: UserProfile;
+  try {
+    const snap = await getDoc(ref);
+    let profile: UserProfile;
 
-  if (!snap.exists()) {
-    profile = buildProfile(user.uid, user.email ?? "", displayNameFor(user));
-    if (isAdmin) profile.role = "admin";
-    await setDoc(ref, profile);
-  } else {
-    profile = snap.data() as UserProfile;
-    const patch: Partial<UserProfile> = { lastSeenAt: Date.now() };
-    if (isAdmin && profile.role !== "admin") patch.role = "admin";
-    await updateDoc(ref, patch);
-    profile = { ...profile, ...patch };
-  }
-
-  if (isAdmin) {
-    const admin = await getDoc(adminRef(user.uid));
-    if (!admin.exists()) {
-      const record: AdminRecord = {
-        uid: user.uid,
-        email: user.email ?? "",
-        grantedBy: "bootstrap",
-        grantedAt: Date.now(),
-      };
-      await setDoc(adminRef(user.uid), record);
+    if (!snap.exists()) {
+      profile = fallback;
+      await setDoc(ref, profile);
+    } else {
+      profile = snap.data() as UserProfile;
+      const patch: Partial<UserProfile> = { lastSeenAt: Date.now() };
+      if (isAdmin && profile.role !== "admin") patch.role = "admin";
+      await updateDoc(ref, patch).catch(() => undefined);
+      profile = { ...profile, ...patch };
     }
-  }
 
-  return profile;
+    if (isAdmin) {
+      try {
+        const adminSnap = await getDoc(adminRef(user.uid));
+        if (!adminSnap.exists()) {
+          const record: AdminRecord = {
+            uid: user.uid,
+            email: user.email ?? "",
+            grantedBy: "bootstrap",
+            grantedAt: Date.now(),
+          };
+          await setDoc(adminRef(user.uid), record);
+        }
+      } catch {
+        /* non-critical allow-list sync */
+      }
+    }
+
+    return profile;
+  } catch {
+    return fallback;
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -234,9 +246,17 @@ export async function fetchProfile(uid: string): Promise<UserProfile | null> {
   return snap.exists() ? (snap.data() as UserProfile) : null;
 }
 
-export function subscribeProfile(uid: string, onChange: (p: UserProfile | null) => void): Unsubscribe {
+export function subscribeProfile(
+  uid: string,
+  onChange: (p: UserProfile | null) => void,
+  onError?: (msg: string) => void,
+): Unsubscribe {
   if (!getFirebase()) return noop;
-  return onSnapshot(userRef(uid), (snap) => onChange(snap.exists() ? (snap.data() as UserProfile) : null));
+  return onSnapshot(
+    userRef(uid),
+    (snap) => onChange(snap.exists() ? (snap.data() as UserProfile) : null),
+    (err) => onError?.(err.message),
+  );
 }
 
 export async function updateOwnProfile(
@@ -333,10 +353,16 @@ export async function adminSetUserRole(uid: string, role: UserRole, grantedBy: s
 /*                                Saved items                                 */
 /* -------------------------------------------------------------------------- */
 
-export function subscribeSaved(uid: string, onChange: (items: SavedItem[]) => void): Unsubscribe {
+export function subscribeSaved(
+  uid: string,
+  onChange: (items: SavedItem[]) => void,
+  onError?: (msg: string) => void,
+): Unsubscribe {
   if (!getFirebase()) return noop;
-  return onSnapshot(query(savedCol(uid), orderBy("savedAt", "desc")), (snap) =>
-    onChange(snap.docs.map((d) => d.data() as SavedItem)),
+  return onSnapshot(
+    query(savedCol(uid), orderBy("savedAt", "desc")),
+    (snap) => onChange(snap.docs.map((d) => d.data() as SavedItem)),
+    (err) => onError?.(err.message),
   );
 }
 
@@ -362,10 +388,16 @@ export async function removeSaved(uid: string, id: string): Promise<void> {
 /*                               Notifications                                */
 /* -------------------------------------------------------------------------- */
 
-export function subscribeNotifications(uid: string, onChange: (items: NotificationItem[]) => void): Unsubscribe {
+export function subscribeNotifications(
+  uid: string,
+  onChange: (items: NotificationItem[]) => void,
+  onError?: (msg: string) => void,
+): Unsubscribe {
   if (!getFirebase()) return noop;
-  return onSnapshot(query(notifCol(uid), orderBy("createdAt", "desc")), (snap) =>
-    onChange(snap.docs.map((d) => d.data() as NotificationItem)),
+  return onSnapshot(
+    query(notifCol(uid), orderBy("createdAt", "desc")),
+    (snap) => onChange(snap.docs.map((d) => d.data() as NotificationItem)),
+    (err) => onError?.(err.message),
   );
 }
 

@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { ensureThread, subscribeMessages, subscribeThread, type Message, type Thread } from "@/lib/chat";
 import { getFirebase } from "@/lib/firebase";
+import { resilientSubscribe } from "@/lib/live";
 import {
   ensureUserRecords,
   resolveIsAdmin,
@@ -37,7 +38,7 @@ const AUTH_TIMEOUT_MS = 4000;
 export function UserStoreProvider({ children }: { children: ReactNode }) {
   const fb = getFirebase();
 
-  const [authReady, setAuthReady] = useState(false);
+  const [authReady, setAuthReady] = useState(!fb);
   const [authedUser, setAuthedUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -83,19 +84,29 @@ export function UserStoreProvider({ children }: { children: ReactNode }) {
         const p = await ensureUserRecords(authedUser, admin);
         if (cancelled) return;
         setProfile(p);
-        // Every member gets a private thread the moment they sign in, so the
-        // team can reach out first and the user never hits a "no thread" state.
         if (!admin) await ensureThread(p);
+        setSyncError(null);
       } catch (err) {
-        if (!cancelled) setSyncError(err instanceof Error ? err.message : "Could not load your account.");
+        if (!cancelled) {
+          const msg = err instanceof Error ? err.message : "Could not load your account.";
+          setSyncError(msg);
+        }
       } finally {
         if (!cancelled) setAuthReady(true);
       }
     })();
 
-    const unsub = subscribeProfile(authedUser.uid, (p) => {
-      if (p) setProfile(p);
-    });
+    const unsub = resilientSubscribe(({ failed, alive }) =>
+      subscribeProfile(
+        authedUser.uid,
+        (p) => {
+          alive();
+          setSyncError(null);
+          if (p) setProfile(p);
+        },
+        failed,
+      ),
+    );
     return () => {
       cancelled = true;
       unsub();
@@ -110,14 +121,30 @@ export function UserStoreProvider({ children }: { children: ReactNode }) {
       return;
     }
     const uid = authedUser.uid;
-    const unsubSaved = subscribeSaved(uid, setSaved);
-    const unsubNotif = subscribeNotifications(uid, (items) => {
-      setNotifications(items);
-      if (items.length === 0 && !welcomed.current.has(uid)) {
-        welcomed.current.add(uid);
-        void sendWelcome(uid, authedUser.displayName ?? "").catch(() => undefined);
-      }
-    });
+    const unsubSaved = resilientSubscribe(({ failed, alive }) =>
+      subscribeSaved(
+        uid,
+        (items) => {
+          alive();
+          setSaved(items);
+        },
+        failed,
+      ),
+    );
+    const unsubNotif = resilientSubscribe(({ failed, alive }) =>
+      subscribeNotifications(
+        uid,
+        (items) => {
+          alive();
+          setNotifications(items);
+          if (items.length === 0 && !welcomed.current.has(uid)) {
+            welcomed.current.add(uid);
+            void sendWelcome(uid, authedUser.displayName ?? "").catch(() => undefined);
+          }
+        },
+        failed,
+      ),
+    );
     return () => {
       unsubSaved();
       unsubNotif();
@@ -133,8 +160,34 @@ export function UserStoreProvider({ children }: { children: ReactNode }) {
     }
     const uid = authedUser.uid;
     const onError = (msg: string) => setSyncError(msg);
-    const unsubThread = subscribeThread(uid, setThread, onError);
-    const unsubMessages = subscribeMessages(uid, setMessages, onError);
+    const unsubThread = resilientSubscribe(({ failed, alive }) =>
+      subscribeThread(
+        uid,
+        (t) => {
+          alive();
+          setSyncError(null);
+          setThread(t);
+        },
+        (msg) => {
+          onError(msg);
+          failed(msg);
+        },
+      ),
+    );
+    const unsubMessages = resilientSubscribe(({ failed, alive }) =>
+      subscribeMessages(
+        uid,
+        (m) => {
+          alive();
+          setSyncError(null);
+          setMessages(m);
+        },
+        (msg) => {
+          onError(msg);
+          failed(msg);
+        },
+      ),
+    );
     return () => {
       unsubThread();
       unsubMessages();
