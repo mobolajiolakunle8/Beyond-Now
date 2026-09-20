@@ -460,22 +460,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(
     async (email: string, password: string) => {
-      if (!cloudEnabled) {
-        const ok = email.trim().toLowerCase() === ADMIN_EMAIL.toLowerCase() && password.length >= 8;
-        if (!ok) return { ok: false, error: "Those details do not match an administrator account." };
-        setAuthed(true);
-        setIsAdmin(true);
-        setAccount({ email: ADMIN_EMAIL, name: ADMIN_NAME });
-        try {
-          sessionStorage.setItem(K.session, "active");
-        } catch {
-          /* ignore */
-        }
-        notify("success", "Signed in (local mode).");
-        return { ok: true };
-      }
       const fb = getFirebase();
-      if (!fb) return { ok: false, error: "Firebase is not configured." };
       try {
         await signInWithEmailAndPassword(fb.auth, email.trim(), password);
         return { ok: true };
@@ -483,7 +468,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return { ok: false, error: authErrorMessage(err) };
       }
     },
-    [cloudEnabled, notify],
+    [],
   );
 
   const logout = useCallback(async () => {

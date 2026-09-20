@@ -1,17 +1,16 @@
 import { useState } from "react";
 import { AdminBtn, Field, TextInput } from "@/admin/ui";
 import { LogoMark } from "@/components/Logo";
-import { ADMIN_EMAIL, isFirebaseConfigured } from "@/lib/firebase";
+import { ADMIN_EMAIL } from "@/lib/firebase";
 import { useStore } from "@/lib/store";
 
 export function Login() {
-  const { login, cloudEnabled, syncStatus } = useStore();
+  const { login, syncStatus } = useStore();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [showHint, setShowHint] = useState(false);
-  const firebaseReady = isFirebaseConfigured();
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -79,15 +78,9 @@ export function Login() {
             Protected by Firebase Authentication. Only authorised administrators can manage the public website.
           </p>
 
-          <div
-            className={`mt-4 inline-flex items-center gap-2 rounded-full px-3 py-1.5 font-display text-[0.7rem] font-bold tracking-[0.08em] uppercase ${
-              firebaseReady
-                ? "bg-teal/12 text-teal-ink"
-                : "bg-sun/20 text-[#8a6500]"
-            }`}
-          >
-            <span className={`h-1.5 w-1.5 rounded-full ${firebaseReady ? "bg-teal" : "bg-sun-deep"}`} />
-            {firebaseReady ? `Firebase connected · ${syncStatus}` : "Local mode · add .env to enable cloud"}
+          <div className="mt-4 inline-flex items-center gap-2 rounded-full bg-teal/12 px-3 py-1.5 font-display text-[0.7rem] font-bold tracking-[0.08em] text-teal-ink uppercase">
+            <span className="h-1.5 w-1.5 rounded-full bg-teal" />
+            Firebase connected · {syncStatus}
           </div>
 
           <form onSubmit={submit} noValidate className="mt-7 space-y-4">
@@ -130,46 +123,21 @@ export function Login() {
               onClick={() => setShowHint((v) => !v)}
               className="flex w-full items-center justify-between gap-2 font-display text-[0.8rem] font-semibold text-navy"
             >
-              {cloudEnabled ? "How to create the first admin" : "Local development credentials"}
+              How to sign in as Administrator
               <span className={showHint ? "rotate-180" : ""}>▾</span>
             </button>
             {showHint && (
               <div className="mt-3 space-y-2 border-t border-mist pt-3 text-[0.82rem] leading-relaxed text-charcoal/70">
-                {cloudEnabled ? (
-                  <>
-                    <p>
-                      1. Open the Firebase console → <strong>Authentication</strong> → <strong>Sign-in method</strong>{" "}
-                      and enable <strong>Email/Password</strong>.
-                    </p>
-                    <p>
-                      2. Under <strong>Users</strong>, add{" "}
-                      <code className="rounded bg-bone px-1.5 py-0.5 font-semibold text-navy">{ADMIN_EMAIL}</code>{" "}
-                      with a strong password.
-                    </p>
-                    <p>
-                      3. Deploy the included security rules (
-                      <code className="rounded bg-bone px-1 py-0.5">firestore.rules</code> +{" "}
-                      <code className="rounded bg-bone px-1 py-0.5">storage.rules</code>).
-                    </p>
-                    <p className="text-[0.75rem] text-charcoal/55">
-                      After the first sign-in you can change the password from Admin Account.
-                    </p>
-                  </>
-                ) : (
-                  <>
-                    <p>
-                      Email:{" "}
-                      <code className="rounded bg-bone px-1.5 py-0.5 font-semibold text-navy">{ADMIN_EMAIL}</code>
-                    </p>
-                    <p>
-                      Password: any password with <strong>8+ characters</strong> (local mode only).
-                    </p>
-                    <p className="text-[0.75rem] text-charcoal/55">
-                      Copy <code className="rounded bg-bone px-1 py-0.5">.env.example</code> to{" "}
-                      <code className="rounded bg-bone px-1 py-0.5">.env</code> to enable Firebase cloud sync.
-                    </p>
-                  </>
-                )}
+                <p>
+                  1. Under <strong>Authentication → Users</strong> in the Firebase console, ensure{" "}
+                  <code className="rounded bg-bone px-1.5 py-0.5 font-semibold text-navy">{ADMIN_EMAIL}</code> is created with your password.
+                </p>
+                <p>
+                  2. Deploy the security rules: <code className="rounded bg-bone px-1 py-0.5">firebase deploy --only firestore:rules,storage</code>.
+                </p>
+                <p className="text-[0.75rem] text-charcoal/55">
+                  After sign in, you can update your credentials anytime from Admin Account.
+                </p>
               </div>
             )}
           </div>

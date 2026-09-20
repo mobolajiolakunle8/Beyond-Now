@@ -89,9 +89,7 @@ export type AdminRecord = {
 /* -------------------------------------------------------------------------- */
 
 function fbOrThrow() {
-  const fb = getFirebase();
-  if (!fb) throw new Error("Firebase is not configured.");
-  return fb;
+  return getFirebase();
 }
 
 /** Firestore rejects `undefined`; strip it before writing. */

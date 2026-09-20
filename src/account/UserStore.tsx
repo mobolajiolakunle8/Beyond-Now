@@ -37,7 +37,7 @@ const AUTH_TIMEOUT_MS = 4000;
 export function UserStoreProvider({ children }: { children: ReactNode }) {
   const fb = getFirebase();
 
-  const [authReady, setAuthReady] = useState(!fb);
+  const [authReady, setAuthReady] = useState(false);
   const [authedUser, setAuthedUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);

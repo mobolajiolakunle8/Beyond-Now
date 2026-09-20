@@ -28,8 +28,8 @@ service cloud.firestore {
     }
     function isAdmin() {
       return signedIn() && (
-        request.auth.token.get('isAdmin', false) == true ||
-        request.auth.token.get('email', '') == 'beyondnow.ng@gmail.com' ||
+        ('isAdmin' in request.auth.token && request.auth.token.isAdmin == true) ||
+        ('email' in request.auth.token && request.auth.token.email.lower() == 'beyondnow.ng@gmail.com') ||
         exists(/databases/$(database)/documents/admins/$(uid()))
       );
     }
@@ -37,9 +37,10 @@ service cloud.firestore {
       return signedIn() && uid() == id;
     }
     function isActiveMember() {
-      return signedIn()
-        && exists(/databases/$(database)/documents/users/$(uid()))
-        && get(/databases/$(database)/documents/users/$(uid())).data.status == 'active';
+      return signedIn() && (
+        !exists(/databases/$(database)/documents/users/$(uid())) ||
+        get(/databases/$(database)/documents/users/$(uid())).data.status != 'suspended'
+      );
     }
     function unchanged(field) {
       return request.resource.data[field] == resource.data[field];

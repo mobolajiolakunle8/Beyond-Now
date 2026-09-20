@@ -1,125 +1,79 @@
 # BEYOND NOW — Firebase Setup & Deployment
 
-One-time setup for project **`beyond-now-14935`**, then the commands you run
-every time you ship.
+Configuration and deployment guide for project **`beyond-now-14935`**.
 
-> Schema, fields and access rules are documented in [`DATABASE.md`](./DATABASE.md).
-> Member accounts and chat behaviour are in [`ACCOUNTS_SETUP.md`](./ACCOUNTS_SETUP.md).
+> Database schema, fields and access rules are in [`DATABASE.md`](./DATABASE.md).
+> Member accounts and realtime chat behaviour are in [`ACCOUNTS_SETUP.md`](./ACCOUNTS_SETUP.md).
 
 ---
 
-## 1. Environment variables
+## 1. Firebase Configuration
 
-```bash
-cp .env.example .env
+The client SDK configuration for `beyond-now-14935` is built directly into the application with automatic fallback:
+
+```ts
+const firebaseConfig = {
+  apiKey: "AIzaSyBFCcuKcHSPsMIKK3o5kZjFnfoKaRPG5Sw",
+  authDomain: "beyond-now-14935.firebaseapp.com",
+  databaseURL: "https://beyond-now-14935-default-rtdb.firebaseio.com",
+  projectId: "beyond-now-14935",
+  storageBucket: "beyond-now-14935.firebasestorage.app",
+  messagingSenderId: "198562263965",
+  appId: "1:198562263965:web:26b12df22078a93886b574",
+  measurementId: "G-SHHCW15QQJ"
+};
 ```
 
-`.env` is already filled for `beyond-now-14935`. Vite exposes only `VITE_*` vars.
+Environment variables (in `.env`) allow overriding any parameter at build time:
 
-| Variable | Purpose |
+| Variable | Config Value |
 |---|---|
-| `VITE_FIREBASE_API_KEY` | Web API key |
+| `VITE_FIREBASE_API_KEY` | `AIzaSyBFCcuKcHSPsMIKK3o5kZjFnfoKaRPG5Sw` |
 | `VITE_FIREBASE_AUTH_DOMAIN` | `beyond-now-14935.firebaseapp.com` |
+| `VITE_FIREBASE_DATABASE_URL` | `https://beyond-now-14935-default-rtdb.firebaseio.com` |
 | `VITE_FIREBASE_PROJECT_ID` | `beyond-now-14935` |
 | `VITE_FIREBASE_STORAGE_BUCKET` | `beyond-now-14935.firebasestorage.app` |
-| `VITE_FIREBASE_MESSAGING_SENDER_ID` | Sender id |
-| `VITE_FIREBASE_APP_ID` | Web app id |
-| `VITE_FIREBASE_MEASUREMENT_ID` | Analytics (optional) |
-| `VITE_ADMIN_EMAIL` | Root administrator email (`beyondnow.ng@gmail.com`) |
-| `VITE_ADMIN_NAME` | Display name for the root administrator |
-
-`.env` is git-ignored. Commit `.env.example` only.
-
-If `.env` is missing, the app runs in **local mode** (content in the browser
-only; the admin signs in with `VITE_ADMIN_EMAIL` and any 8+ character password).
+| `VITE_FIREBASE_MESSAGING_SENDER_ID` | `198562263965` |
+| `VITE_FIREBASE_APP_ID` | `1:198562263965:web:26b12df22078a93886b574` |
+| `VITE_FIREBASE_MEASUREMENT_ID` | `G-SHHCW15QQJ` |
+| `VITE_ADMIN_EMAIL` | `beyondnow.ng@gmail.com` |
+| `VITE_ADMIN_NAME` | `Master Administrator` |
 
 ---
 
-## 2. Firebase console (once)
+## 2. One-Time Console Setup
 
 1. **Authentication → Sign-in method** → enable **Email/Password**.
-2. **Authentication → Users → Add user**
-   `beyondnow.ng@gmail.com` + a strong password.
-   ⚠️ Do this **before** the site is public — the root-admin rule matches on
-   this email, so it must belong to you.
-3. **Firestore Database → Create database** → production mode → choose a region.
-4. **Storage → Get started** (default bucket).
+2. **Authentication → Users → Add user**:
+   - Email: `beyondnow.ng@gmail.com`
+   - Set a strong password.
+3. **Firestore Database → Create database** → production mode.
+4. **Storage → Get started** (bucket: `beyond-now-14935.firebasestorage.app`).
 
 ---
 
-## 3. Firebase CLI (once)
+## 3. Deploying Rules and Hosting
 
 ```bash
-npm install -g firebase-tools
-firebase login
-firebase use default        # → beyond-now-14935 (from .firebaserc)
-```
-
----
-
-## 4. Deploy
-
-### Security rules (deploy first, and again whenever `*.rules` change)
-
-```bash
-firebase deploy --only firestore:rules,storage
-```
-
-### Website (Hosting)
-
-```bash
+# 1. Build the production application
 npm run build
-firebase deploy --only hosting:default
-```
 
-`firebase deploy --only hosting` is equivalent — `.firebaserc` maps the
-`default` hosting target to `beyond-now-14935`. `firebase.json` serves
-`dist/`, rewrites every path to `index.html` (the app uses hash routing), and
-sets no-cache + security headers on the document.
+# 2. Deploy Firestore & Storage Security Rules
+firebase deploy --only firestore:rules,storage
 
-### Everything at once
-
-```bash
-npm run build && firebase deploy
+# 3. Deploy Hosting
+firebase deploy --only hosting
 ```
 
 ---
 
-## 5. How publishing works
+## 4. Cross-Browser Realtime Sync Verification
 
-There is **no draft/publish step**. Every edit made in the admin dashboard is
-written to `site/main` about one second after you stop typing, and every open
-browser — visitors and admins — receives it through a realtime listener.
-
-| Action | Effect |
-|---|---|
-| Edit any field | Saved locally instantly; pushed to Firestore after ~1 s |
-| Close the tab mid-edit | Pending write is flushed on `pagehide` |
-| Firebase unreachable | Public site keeps rendering from cache; admin sees **Sync error** |
-| Hide a story / resource | Removed from the public page immediately |
-
-The header badge shows **Publishing…** while a write is in flight and **Live**
-once it has landed.
-
----
-
-## 6. Verify
-
-1. Open the site → it paints immediately.
-2. `/#/admin` → sign in with the root admin.
-3. Change the hero headline → within ~2 s a second browser shows the new text.
-4. `/#/account/signup` in a private window → create a member → **Messages** → send.
-5. Admin **Messages** shows the thread with a **1 new** badge instantly; reply.
-6. Member sees the reply and a notification without refreshing.
-7. `/#/admin` as the member → "Administrators only" screen (and Firestore denies writes).
-
----
-
-## 7. Checklist
-
-- [ ] Email/Password enabled
-- [ ] Root admin user created (`beyondnow.ng@gmail.com`)
-- [ ] `firestore.rules` + `storage.rules` deployed
-- [ ] `npm run build && firebase deploy --only hosting:default`
-- [ ] `.env` not committed
-- [ ] Admin password rotated after first sign-in (Admin → Admin Account)
+1. **Sign Up / Sign In:** User accounts register directly in Firebase Auth and create Firestore member documents at `users/{uid}`.
+2. **Realtime Chat:**
+   - When a member sends a message in `#/account/messages`, it is written to `threads/{uid}/messages` with `unreadByAdmin + 1`.
+   - The Admin `#/admin/messages` receives the message instantly via Firestore `onSnapshot`.
+   - When the admin replies, the user's view updates immediately across all open tabs/devices.
+3. **Content Auto-Publish:**
+   - Edits made in the Admin Dashboard automatically sync to `site/main`.
+   - Any open visitor browser updates live without a page refresh.

@@ -15,8 +15,8 @@ service firebase.storage {
     }
     function isAdmin() {
       return signedIn() && (
-        request.auth.token.get('isAdmin', false) == true ||
-        request.auth.token.get('email', '') == 'beyondnow.ng@gmail.com' ||
+        ('isAdmin' in request.auth.token && request.auth.token.isAdmin == true) ||
+        ('email' in request.auth.token && request.auth.token.email.lower() == 'beyondnow.ng@gmail.com') ||
         firestore.exists(/databases/(default)/documents/admins/$(request.auth.uid))
       );
     }
