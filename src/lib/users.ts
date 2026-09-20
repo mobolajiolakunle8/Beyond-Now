@@ -189,51 +189,46 @@ export async function resolveIsAdmin(user: User): Promise<boolean> {
 }
 
 /**
+ * Writes (or refreshes) the `admins/{uid}` allow-list record. This is the
+ * bootstrap path the root administrator uses to unlock Cloud access — the
+ * security rules permit it only for `{ROOT ADMIN EMAIL}`. Members calling it
+ * receive `permission-denied`, which the caller turns into remediation copy.
+ */
+export async function writeAdminAllowList(uid: string, email: string, grantedBy = "bootstrap"): Promise<void> {
+  const record: AdminRecord = { uid, email, grantedBy, grantedAt: Date.now() };
+  await setDoc(adminRef(uid), record, { merge: true });
+}
+
+/**
  * Guarantees the signed-in user has a profile document (covers accounts that
  * were created before the profile seed existed) and, for administrators,
  * that their role and allow-list record are in place.
  */
 export async function ensureUserRecords(user: User, isAdmin: boolean): Promise<UserProfile> {
-  const fallback = buildProfile(user.uid, user.email ?? "", displayNameFor(user));
-  if (isAdmin) fallback.role = "admin";
-
   const ref = userRef(user.uid);
-  try {
-    const snap = await getDoc(ref);
-    let profile: UserProfile;
+  const snap = await getDoc(ref);
+  let profile: UserProfile;
 
-    if (!snap.exists()) {
-      profile = fallback;
-      await setDoc(ref, profile);
-    } else {
-      profile = snap.data() as UserProfile;
-      const patch: Partial<UserProfile> = { lastSeenAt: Date.now() };
-      if (isAdmin && profile.role !== "admin") patch.role = "admin";
-      await updateDoc(ref, patch).catch(() => undefined);
-      profile = { ...profile, ...patch };
-    }
-
-    if (isAdmin) {
-      try {
-        const adminSnap = await getDoc(adminRef(user.uid));
-        if (!adminSnap.exists()) {
-          const record: AdminRecord = {
-            uid: user.uid,
-            email: user.email ?? "",
-            grantedBy: "bootstrap",
-            grantedAt: Date.now(),
-          };
-          await setDoc(adminRef(user.uid), record);
-        }
-      } catch {
-        /* non-critical allow-list sync */
-      }
-    }
-
-    return profile;
-  } catch {
-    return fallback;
+  if (!snap.exists()) {
+    profile = buildProfile(user.uid, user.email ?? "", displayNameFor(user));
+    if (isAdmin) profile.role = "admin";
+    await setDoc(ref, profile);
+  } else {
+    profile = snap.data() as UserProfile;
+    const patch: Partial<UserProfile> = { lastSeenAt: Date.now() };
+    if (isAdmin && profile.role !== "admin") patch.role = "admin";
+    await updateDoc(ref, patch);
+    profile = { ...profile, ...patch };
   }
+
+  if (isAdmin) {
+    const admin = await getDoc(adminRef(user.uid));
+    if (!admin.exists()) {
+      await writeAdminAllowList(user.uid, user.email ?? "", "bootstrap");
+    }
+  }
+
+  return profile;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -246,11 +241,7 @@ export async function fetchProfile(uid: string): Promise<UserProfile | null> {
   return snap.exists() ? (snap.data() as UserProfile) : null;
 }
 
-export function subscribeProfile(
-  uid: string,
-  onChange: (p: UserProfile | null) => void,
-  onError?: (msg: string) => void,
-): Unsubscribe {
+export function subscribeProfile(uid: string, onChange: (p: UserProfile | null) => void, onError?: (msg: string) => void): Unsubscribe {
   if (!getFirebase()) return noop;
   return onSnapshot(
     userRef(uid),
@@ -353,11 +344,7 @@ export async function adminSetUserRole(uid: string, role: UserRole, grantedBy: s
 /*                                Saved items                                 */
 /* -------------------------------------------------------------------------- */
 
-export function subscribeSaved(
-  uid: string,
-  onChange: (items: SavedItem[]) => void,
-  onError?: (msg: string) => void,
-): Unsubscribe {
+export function subscribeSaved(uid: string, onChange: (items: SavedItem[]) => void, onError?: (msg: string) => void): Unsubscribe {
   if (!getFirebase()) return noop;
   return onSnapshot(
     query(savedCol(uid), orderBy("savedAt", "desc")),
@@ -388,11 +375,7 @@ export async function removeSaved(uid: string, id: string): Promise<void> {
 /*                               Notifications                                */
 /* -------------------------------------------------------------------------- */
 
-export function subscribeNotifications(
-  uid: string,
-  onChange: (items: NotificationItem[]) => void,
-  onError?: (msg: string) => void,
-): Unsubscribe {
+export function subscribeNotifications(uid: string, onChange: (items: NotificationItem[]) => void, onError?: (msg: string) => void): Unsubscribe {
   if (!getFirebase()) return noop;
   return onSnapshot(
     query(notifCol(uid), orderBy("createdAt", "desc")),

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AdminBtn, Card, PageHeader } from "@/admin/ui";
 import { LandingPage } from "@/components/LandingPage";
 import { formatBytes, formatDateTime, relativeTime, resolveContentMedia } from "@/lib/media";
-import { ContentProvider, useStore, type SyncStatus } from "@/lib/store";
+import { ContentProvider, useStore, type SyncStatus, type CloudCheck } from "@/lib/store";
 import { cn } from "@/utils/cn";
 
 const SYNC_LABEL: Record<SyncStatus, string> = {
@@ -16,7 +16,18 @@ const SYNC_LABEL: Record<SyncStatus, string> = {
 /* ============================== OVERVIEW ============================== */
 
 export function Overview({ go }: { go: (route: string) => void }) {
-  const { content, media, updatedAt, saving, account, cloudEnabled, syncStatus, syncError } = useStore();
+  const { content, media, updatedAt, saving, account, cloudEnabled, syncStatus, syncError, verifyCloud, retryCloud } = useStore();
+  const [checks, setChecks] = useState<CloudCheck[] | null>(null);
+  const [checking, setChecking] = useState(false);
+
+  const runCheck = async () => {
+    setChecking(true);
+    try {
+      setChecks(await verifyCloud());
+    } finally {
+      setChecking(false);
+    }
+  };
 
   const publishedStories = content.stories.filter((s) => s.status === "published").length;
   const publishedPacks = content.resources.filter((r) => r.status === "published").length;
@@ -45,33 +56,16 @@ export function Overview({ go }: { go: (route: string) => void }) {
       <div
         className={cn(
           "mb-5 flex flex-wrap items-center justify-between gap-4 rounded-2xl border px-5 py-4",
-          syncStatus === "error"
-            ? "border-red-200 bg-red-50"
-            : saving
-              ? "border-sun bg-sun/10"
-              : "border-teal/30 bg-teal/8",
+          syncStatus === "error" ? "border-red-200 bg-red-50" : saving ? "border-sun bg-sun/10" : "border-teal/30 bg-teal/8",
         )}
       >
         <div className="flex items-center gap-3">
-          <span
-            className={cn(
-              "flex h-10 w-10 items-center justify-center rounded-xl text-lg font-bold",
-              syncStatus === "error"
-                ? "bg-red-100 text-red-700"
-                : saving
-                  ? "bg-sun/30 text-[#8a6500]"
-                  : "bg-teal/20 text-teal-ink",
-            )}
-          >
-            {syncStatus === "error" ? "!" : saving ? "…" : "✓"}
+          <span className={cn("flex h-10 w-10 items-center justify-center rounded-xl text-lg", saving ? "bg-sun/30" : "bg-teal/20")}>
+            {saving ? "…" : "✓"}
           </span>
           <div>
             <p className="font-display text-[0.95rem] font-bold text-navy">
-              {saving
-                ? "Publishing your latest change…"
-                : syncStatus === "error"
-                  ? "Your last change could not be synced"
-                  : "Website is live and up to date"}
+              {saving ? "Publishing your latest change…" : syncStatus === "error" ? "Your last change could not be synced" : "Website is live and up to date"}
             </p>
             <p className="text-[0.8rem] text-charcoal/60">
               {syncError ?? (updatedAt ? `Last updated ${relativeTime(updatedAt)}` : "No edits yet")}
@@ -80,6 +74,50 @@ export function Overview({ go }: { go: (route: string) => void }) {
           </div>
         </div>
       </div>
+
+      {syncError && (
+        <Card
+          title="Cloud setup check"
+          description="One of the server checks below is failing. Run the check to see exactly what to fix, then everything recovers automatically."
+          className="mb-5 border-red-200"
+          action={
+            <AdminBtn variant="primary" disabled={checking} onClick={() => void runCheck()}>
+              {checking ? "Checking…" : "Run cloud check"}
+            </AdminBtn>
+          }
+        >
+          {checks ? (
+            <ul className="space-y-2.5">
+              {checks.map((step) => (
+                <li key={step.id} className="flex items-start gap-3 rounded-xl border border-mist bg-bone/50 px-4 py-3">
+                  <span
+                    className={cn(
+                      "mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full text-[0.7rem] font-bold text-white",
+                      step.ok ? "bg-teal" : "bg-red-500",
+                    )}
+                  >
+                    {step.ok ? "✓" : "!"}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="font-display text-[0.88rem] font-bold text-navy">{step.label}</p>
+                    {step.detail && <p className="mt-0.5 text-[0.8rem] leading-relaxed text-charcoal/65">{step.detail}</p>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-[0.85rem] leading-relaxed text-charcoal/65">
+              The most common cause: the database was created in production mode and the security rules have not been
+              deployed yet. From a terminal in this project run{" "}
+              <code className="rounded bg-bone px-1.5 py-0.5 font-semibold text-navy">npm run deploy:rules</code>, then
+              press Run cloud check — recovery is automatic, no refresh needed.
+            </p>
+          )}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <AdminBtn size="sm" variant="outline" onClick={retryCloud}>Retry now</AdminBtn>
+          </div>
+        </Card>
+      )}
 
       <div className="mb-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {[

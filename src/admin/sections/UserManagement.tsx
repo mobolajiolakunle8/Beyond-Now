@@ -13,7 +13,7 @@ import {
   type Thread,
 } from "@/lib/chat";
 import { getFirebase } from "@/lib/firebase";
-import { resilientSubscribe } from "@/lib/live";
+import { listenLoop } from "@/lib/listen";
 import { formatDate, formatDateTime, relativeTime } from "@/lib/media";
 import { useStore } from "@/lib/store";
 import { adminSetUserRole, adminSetUserStatus, type UserProfile } from "@/lib/users";
@@ -73,31 +73,13 @@ function Conversation({ uid, seed, className }: { uid: string; seed?: Pick<UserP
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const unsubThread = resilientSubscribe(({ failed, alive }) =>
-      subscribeThread(
-        uid,
-        (t) => {
-          alive();
-          setThread(t);
-        },
-        (msg) => {
-          setError(msg);
-          failed(msg);
-        },
-      ),
+    const unsubThread = listenLoop(
+      (confirm, fatal) => subscribeThread(uid, (t) => { confirm(); setThread(t); }, fatal),
+      { onError: setError, onRecover: () => setError(null) },
     );
-    const unsubMessages = resilientSubscribe(({ failed, alive }) =>
-      subscribeMessages(
-        uid,
-        (m) => {
-          alive();
-          setMessages(m);
-        },
-        (msg) => {
-          setError(msg);
-          failed(msg);
-        },
-      ),
+    const unsubMessages = listenLoop(
+      (confirm, fatal) => subscribeMessages(uid, (m) => { confirm(); setMessages(m); }, fatal),
+      { onError: setError, onRecover: () => setError(null) },
     );
     return () => {
       unsubThread();
@@ -205,17 +187,9 @@ export function UsersAdmin() {
 
   useEffect(
     () =>
-      resilientSubscribe(({ failed, alive }) =>
-        subscribeAllUsers(
-          (list) => {
-            alive();
-            setUsers(list);
-          },
-          (msg) => {
-            setError(msg);
-            failed(msg);
-          },
-        ),
+      listenLoop(
+        (confirm, fatal) => subscribeAllUsers((list) => { confirm(); setUsers(list); }, fatal),
+        { onError: setError, onRecover: () => setError(null) },
       ),
     [],
   );
@@ -431,17 +405,9 @@ export function MessagesAdmin() {
 
   useEffect(
     () =>
-      resilientSubscribe(({ failed, alive }) =>
-        subscribeAllThreads(
-          (list) => {
-            alive();
-            setThreads(list);
-          },
-          (msg) => {
-            setError(msg);
-            failed(msg);
-          },
-        ),
+      listenLoop(
+        (confirm, fatal) => subscribeAllThreads((list) => { confirm(); setThreads(list); }, fatal),
+        { onError: setError, onRecover: () => setError(null) },
       ),
     [],
   );
@@ -548,18 +514,10 @@ export function ArticlesAdmin() {
   useEffect(() => {
     const fb = getFirebase();
     if (!fb) return;
-    return resilientSubscribe(({ failed, alive }) =>
-      onSnapshot(
-        query(collection(fb.db, "articles"), orderBy("updatedAt", "desc"), limit(200)),
-        (snap) => {
-          alive();
-          setArticles(snap.docs.map((d) => d.data() as Article));
-        },
-        (err) => {
-          notify("error", err.message);
-          failed(err.message);
-        },
-      ),
+    return onSnapshot(
+      query(collection(fb.db, "articles"), orderBy("updatedAt", "desc"), limit(200)),
+      (snap) => setArticles(snap.docs.map((d) => d.data() as Article)),
+      (err) => notify("error", err.message),
     );
   }, [notify]);
 

@@ -57,7 +57,7 @@ function Restricted({ email, onSignOut }: { email: string; onSignOut: () => void
 }
 
 export function AdminApp({ route }: { route: string }) {
-  const { isAuthed, isAdmin, ready, account, logout, saving, updatedAt, cloudEnabled, syncStatus, resync } = useStore();
+  const { isAuthed, isAdmin, ready, account, logout, saving, updatedAt, cloudEnabled, syncStatus } = useStore();
   const [menuOpen, setMenuOpen] = useState(false);
   const current = (NAV.find((n) => n.id === route)?.id ?? "overview") as RouteId;
 
@@ -100,35 +100,16 @@ export function AdminApp({ route }: { route: string }) {
     );
   }
 
-  const isDegraded = cloudEnabled && (syncStatus === "error" || syncStatus === "offline");
   const statusBadge = (
-    <span className="inline-flex items-center gap-2">
-      <span
-        className={cn(
-          "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-display text-[0.68rem] font-bold tracking-[0.08em] uppercase",
-          saving
-            ? "bg-sun/20 text-[#8a6500]"
-            : syncStatus === "error"
-              ? "bg-red-100 text-red-700"
-              : syncStatus === "offline"
-                ? "bg-mist text-charcoal/60"
-                : "bg-teal/12 text-teal-ink",
-        )}
-        title={cloudEnabled ? `Firebase ${syncStatus}` : "Running without Firebase"}
-      >
-        <span
-          className={cn(
-            "h-1.5 w-1.5 rounded-full",
-            saving ? "animate-pulse bg-sun-deep" : syncStatus === "error" ? "bg-red-500" : syncStatus === "offline" ? "bg-charcoal/40" : "bg-teal",
-          )}
-        />
-        {saving ? "Publishing…" : syncStatus === "error" ? "Sync error" : syncStatus === "offline" ? "Offline" : "Live"}
-      </span>
-      {isDegraded && (
-        <AdminBtn size="sm" variant="outline" onClick={() => void resync()}>
-          Retry
-        </AdminBtn>
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-display text-[0.68rem] font-bold tracking-[0.08em] uppercase",
+        saving ? "bg-sun/20 text-[#8a6500]" : syncStatus === "error" ? "bg-red-100 text-red-700" : "bg-teal/12 text-teal-ink",
       )}
+      title={cloudEnabled ? `Firebase ${syncStatus}` : "Running without Firebase"}
+    >
+      <span className={cn("h-1.5 w-1.5 rounded-full", saving ? "animate-pulse bg-sun-deep" : syncStatus === "error" ? "bg-red-500" : "bg-teal")} />
+      {saving ? "Publishing…" : syncStatus === "error" ? "Sync error" : "Live"}
     </span>
   );
 

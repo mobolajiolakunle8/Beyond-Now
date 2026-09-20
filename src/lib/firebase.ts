@@ -12,21 +12,31 @@ export type FirebaseServices = {
   analytics: Analytics | null;
 };
 
+const DEFAULT_FIREBASE_CONFIG = {
+  apiKey: "AIzaSyBFCcuKcHSPsMIKK3o5kZjFnfoKaRPG5Sw",
+  authDomain: "beyond-now-14935.firebaseapp.com",
+  projectId: "beyond-now-14935",
+  storageBucket: "beyond-now-14935.firebasestorage.app",
+  messagingSenderId: "198562263965",
+  appId: "1:198562263965:web:26b12df22078a93886b574",
+  measurementId: "G-SHHCW15QQJ",
+};
+
 const config = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY as string | undefined,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN as string | undefined,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID as string | undefined,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET as string | undefined,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID as string | undefined,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID as string | undefined,
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID as string | undefined,
+  apiKey: (import.meta.env.VITE_FIREBASE_API_KEY as string | undefined)?.trim() || DEFAULT_FIREBASE_CONFIG.apiKey,
+  authDomain: (import.meta.env.VITE_FIREBASE_AUTH_DOMAIN as string | undefined)?.trim() || DEFAULT_FIREBASE_CONFIG.authDomain,
+  projectId: (import.meta.env.VITE_FIREBASE_PROJECT_ID as string | undefined)?.trim() || DEFAULT_FIREBASE_CONFIG.projectId,
+  storageBucket: (import.meta.env.VITE_FIREBASE_STORAGE_BUCKET as string | undefined)?.trim() || DEFAULT_FIREBASE_CONFIG.storageBucket,
+  messagingSenderId: (import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID as string | undefined)?.trim() || DEFAULT_FIREBASE_CONFIG.messagingSenderId,
+  appId: (import.meta.env.VITE_FIREBASE_APP_ID as string | undefined)?.trim() || DEFAULT_FIREBASE_CONFIG.appId,
+  measurementId: (import.meta.env.VITE_FIREBASE_MEASUREMENT_ID as string | undefined)?.trim() || DEFAULT_FIREBASE_CONFIG.measurementId,
 };
 
 const REQUIRED = ["apiKey", "authDomain", "projectId", "storageBucket", "appId"] as const;
 
-/** True when every required Vite env var is present and non-empty. */
+/** True when every required Firebase key is present and non-empty. */
 export function isFirebaseConfigured(): boolean {
-  return REQUIRED.every((key) => Boolean(config[key]?.trim()));
+  return REQUIRED.every((key) => Boolean(config[key]));
 }
 
 export const ADMIN_EMAIL =
@@ -36,13 +46,7 @@ export const ADMIN_NAME =
   (import.meta.env.VITE_ADMIN_NAME as string | undefined)?.trim() || "Master Administrator";
 
 let cached: FirebaseServices | null | undefined;
-let initError: string | null = null;
 let analyticsPromise: Promise<Analytics | null> | null = null;
-
-/** Human-readable reason Firebase is unavailable, if any. */
-export function firebaseInitError(): string | null {
-  return initError;
-}
 
 /**
  * Lazily initialises the Firebase app and core services.
@@ -54,7 +58,6 @@ export function firebaseInitError(): string | null {
 export function getFirebase(): FirebaseServices | null {
   if (cached !== undefined) return cached;
   if (!isFirebaseConfigured()) {
-    initError = "Firebase env vars are missing.";
     cached = null;
     return null;
   }
@@ -64,12 +67,12 @@ export function getFirebase(): FirebaseServices | null {
       getApps().length > 0
         ? getApps()[0]!
         : initializeApp({
-            apiKey: config.apiKey!,
-            authDomain: config.authDomain!,
-            projectId: config.projectId!,
-            storageBucket: config.storageBucket!,
+            apiKey: config.apiKey,
+            authDomain: config.authDomain,
+            projectId: config.projectId,
+            storageBucket: config.storageBucket,
             messagingSenderId: config.messagingSenderId,
-            appId: config.appId!,
+            appId: config.appId,
             measurementId: config.measurementId || undefined,
           });
 
@@ -80,7 +83,6 @@ export function getFirebase(): FirebaseServices | null {
       storage: getStorage(app),
       analytics: null,
     };
-    initError = null;
 
     // Analytics is strictly optional and must never block or break startup.
     if (typeof window !== "undefined" && config.measurementId && app) {
@@ -92,8 +94,7 @@ export function getFirebase(): FirebaseServices | null {
         })
         .catch(() => null);
     }
-  } catch (err) {
-    initError = err instanceof Error ? err.message : "Firebase could not start.";
+  } catch {
     cached = null;
   }
   return cached;

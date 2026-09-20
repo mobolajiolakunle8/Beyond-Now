@@ -49,7 +49,7 @@ function Notice({ tone, children }: { tone: "success" | "error"; children: strin
 /* -------------------------------- Dashboard ------------------------------- */
 
 export function DashboardPage() {
-  const { profile, saved, notifications, messages, unreadNotifications, unreadMessages, syncError } = useUserStore();
+  const { profile, saved, notifications, messages, unreadNotifications, unreadMessages, syncError, retrySync } = useUserStore();
   const last = messages[messages.length - 1];
 
   return (
@@ -59,7 +59,12 @@ export function DashboardPage() {
         description="A snapshot of your account and the latest from the Beyond Now team."
       />
 
-      {syncError && <div className="mb-5"><Notice tone="error">{syncError}</Notice></div>}
+      {syncError && (
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3">
+          <p className="text-[0.85rem] font-medium text-red-700">{syncError}</p>
+          <AcctBtn variant="outline" size="sm" onClick={retrySync}>Retry</AcctBtn>
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Stat label="Saved resources" value={String(saved.length)} />
@@ -215,7 +220,7 @@ export function ProfilePage() {
 /* -------------------------------- Messages -------------------------------- */
 
 export function MessagesPage() {
-  const { authedUser, profile, thread, messages, unreadMessages, syncError } = useUserStore();
+  const { authedUser, profile, thread, messages, unreadMessages, syncError, retrySync } = useUserStore();
   const wa = useWa();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -320,7 +325,16 @@ export function MessagesPage() {
               {busy ? "Sending…" : "Send"}
             </AcctBtn>
           </div>
-          {(error || syncError) && <div className="mt-2"><Notice tone="error">{error ?? syncError ?? ""}</Notice></div>}
+          {(error || syncError) && (
+            <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+              <span className="text-[0.8rem] text-red-700">{error ?? syncError ?? ""}</span>
+              {syncError && !error && (
+                <button type="button" onClick={retrySync} className="shrink-0 font-display text-[0.78rem] font-semibold text-navy hover:underline">
+                  Retry
+                </button>
+              )}
+            </div>
+          )}
           <p className="mt-2 text-[0.7rem] text-charcoal/45">
             Only you and the Beyond Now team can read this. If you are in immediate danger, contact emergency services first.
           </p>

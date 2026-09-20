@@ -21,7 +21,6 @@ import {
 import { DEFAULT_CONTENT, cloneContent, mergeContent, type MediaItem, type SiteContent } from "@/lib/content";
 import { ADMIN_EMAIL, ADMIN_NAME, authErrorMessage, getFirebase, isFirebaseConfigured } from "@/lib/firebase";
 import { processImageFile } from "@/lib/media";
-import { onReconnect, resilientSubscribe } from "@/lib/live";
 import {
   deleteMediaFromCloud,
   pullMediaLibrary,
@@ -34,9 +33,11 @@ import {
   uploadMediaToCloud,
   type SyncStatus,
 } from "@/lib/sync";
-import { resolveIsAdmin } from "@/lib/users";
+import { listenLoop } from "@/lib/listen";
+import { resolveIsAdmin, writeAdminAllowList } from "@/lib/users";
 
 export type { SyncStatus };
+export type CloudCheck = { id: string; label: string; ok: boolean; detail?: string };
 export type Account = { email: string; name: string; uid?: string };
 export type Toast = { id: string; tone: "success" | "error" | "info"; message: string };
 
@@ -103,9 +104,9 @@ type StoreValue = {
   syncError: string | null;
   ready: boolean;
   updateContent: (recipe: (content: SiteContent) => SiteContent) => void;
+  retryCloud: () => void;
+  verifyCloud: () => Promise<CloudCheck[]>;
   resetContent: () => Promise<void>;
-  /** Forces a fresh pull from the cloud and heals dead listeners. */
-  resync: () => Promise<void>;
   uploadMedia: (files: FileList | File[]) => Promise<MediaItem[]>;
   deleteMedia: (id: string) => Promise<void>;
   replaceMedia: (id: string, file: File) => Promise<void>;
@@ -146,11 +147,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const isAdminRef = useRef(false);
   isAdminRef.current = isAdmin;
   const cloudWriteTimer = useRef<number>(0);
-  /** Highest site-document revision this browser knows about. */
-  const revRef = useRef(0);
-  /** `updatedAt` of our own last successful push (echo detection). */
-  const ownPushStampRef = useRef("");
-  const convergeTimer = useRef<number>(0);
+  /** Set while a cloud snapshot is being applied so it is not echoed back. */
+  const applyingRemote = useRef(false);
+  /** True while local edits are still waiting for their cloud write to land.
+   *  Remote snapshots must never clobber those edits. */
+  const pendingPush = useRef(false);
+  /** Increment to rebuild every cloud subscription (used by Retry). */
+  const [syncEpoch, setSyncEpoch] = useState(0);
+  const lastSyncError = useRef<string>("");
 
   /* ---------- toasts ---------- */
 
@@ -161,6 +165,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setToasts((prev) => prev.filter((t) => t.id !== id));
       delete toastTimers.current[id];
     }, 4600);
+  }, []);
+
+  const setSyncErrorOnce = useCallback((message: string | null) => {
+    const clean = message ?? "";
+    if (clean === lastSyncError.current) return;
+    lastSyncError.current = clean;
+    setSyncError(message);
   }, []);
 
   const dismissToast = useCallback((id: string) => {
@@ -222,6 +233,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   /* ---------- content + media sync ---------- */
 
   const applyRemote = useCallback((published: unknown, stamp: string | undefined) => {
+    // Never let a remote snapshot clobber edits that have not been pushed yet
+    // (e.g. after a failed save the admin keeps working offline).
+    if (pendingPush.current) return;
+    applyingRemote.current = true;
     const next = mergeContent(DEFAULT_CONTENT, published);
     setContent(next);
     writeLocal(K.content, next);
@@ -229,49 +244,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setUpdatedAt(stamp);
       writeLocal(K.updatedAt, stamp);
     }
+    window.setTimeout(() => {
+      applyingRemote.current = false;
+    }, 0);
   }, []);
-
-  /**
-   * One-shot pull of the live document + media, applied when newer than what
-   * we hold. Runs at boot, whenever the tab becomes active again, and on
-   * manual resync — so a tab left open for hours never serves stale content.
-   */
-  const pullOnce = useCallback(async () => {
-    if (!cloudEnabled) return;
-    try {
-      const [site, library] = await Promise.all([
-        withTimeout(pullSiteDocument(), BOOT_TIMEOUT_MS),
-        withTimeout(pullMediaLibrary(), BOOT_TIMEOUT_MS),
-      ]);
-      if (site) {
-        const remoteRev = site.rev ?? 0;
-        revRef.current = Math.max(revRef.current, remoteRev);
-        // Pending local edits will push shortly and win; otherwise adopt it.
-        if (!cloudWriteTimer.current) applyRemote(site.published, site.updatedAt);
-      }
-      if (library.length) {
-        setMedia(library);
-        writeLocal(K.media, library);
-      }
-      setSyncStatus("synced");
-      setSyncError(null);
-    } catch (err) {
-      setSyncStatus("offline");
-      setSyncError(
-        err instanceof Error && err.message === "timeout"
-          ? "Firebase took too long. Showing cached content."
-          : err instanceof Error
-            ? err.message
-            : "Could not reach Firebase.",
-      );
-    }
-  }, [applyRemote, cloudEnabled]);
-
-  const resync = useCallback(async () => {
-    if (!cloudEnabled) return;
-    setSyncStatus("connecting");
-    await pullOnce();
-  }, [cloudEnabled, pullOnce]);
 
   useEffect(() => {
     if (!cloudEnabled) {
@@ -280,66 +256,99 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
     let cancelled = false;
 
-    void pullOnce().finally(() => {
-      if (!cancelled) setContentReady(true);
-    });
+    (async () => {
+      try {
+        const [site, library] = await Promise.all([
+          withTimeout(pullSiteDocument(), BOOT_TIMEOUT_MS),
+          withTimeout(pullMediaLibrary(), BOOT_TIMEOUT_MS),
+        ]);
+        if (cancelled) return;
+        if (site) applyRemote(site.published, site.updatedAt);
+        if (library.length) {
+          setMedia(library);
+          writeLocal(K.media, library);
+        }
+        setSyncStatus("synced");
+        setSyncError(null);
+      } catch (err) {
+        if (cancelled) return;
+        setSyncStatus("offline");
+        setSyncError(err instanceof Error && err.message === "timeout" ? "Firebase took too long. Showing cached content." : err instanceof Error ? err.message : "Could not reach Firebase.");
+      } finally {
+        if (!cancelled) setContentReady(true);
+      }
+    })();
 
-    /*
-     * Live listeners. A Firestore listener that errors (e.g. the page loaded
-     * before the security rules were deployed) would otherwise stay dead and
-     * the tab would silently freeze on old content. `resilientSubscribe`
-     * reopens it with backoff, so every browser converges on the live
-     * document without a refresh.
-     */
-    const unsubSite = resilientSubscribe(({ failed, alive }) =>
-      subscribeSiteDocument(
-        (remote) => {
-          alive();
-          if (!remote) return;
-          const remoteRev = remote.rev ?? 0;
-          if (remoteRev < revRef.current) return; // stale snapshot
-          if (remoteRev === revRef.current) {
-            // Same revision: normally our own push echoing back. If it came
-            // from a different writer at the same revision (rare race), pull
-            // shortly so all browsers settle on Firestore's canonical copy.
-            if (remote.updatedAt !== ownPushStampRef.current && !cloudWriteTimer.current) {
-              window.clearTimeout(convergeTimer.current);
-              convergeTimer.current = window.setTimeout(() => void pullOnce(), 1200);
-            }
-            return;
-          }
-          revRef.current = remoteRev;
-          if (cloudWriteTimer.current) return; // our in-flight edit wins
-          applyRemote(remote.published, remote.updatedAt);
+    const unsubSite = listenLoop(
+      (confirm, fatal) =>
+        subscribeSiteDocument(
+          (remote) => {
+            confirm();
+            if (!remote) return;
+            // Skip echoes of our own pending write; the debounced push will land shortly.
+            if (cloudWriteTimer.current) return;
+            applyRemote(remote.published, remote.updatedAt);
+            setSyncStatus("synced");
+            setSyncErrorOnce(null);
+          },
+          fatal,
+        ),
+      {
+        onError: (message) => {
+          setSyncStatus("error");
+          setSyncErrorOnce(message);
+        },
+        onRecover: () => {
           setSyncStatus("synced");
-          setSyncError(null);
+          setSyncErrorOnce(null);
         },
-        failed,
-      ),
+      },
     );
-    const unsubMedia = resilientSubscribe(({ failed, alive }) =>
-      subscribeMediaLibrary(
-        (items) => {
-          alive();
-          setMedia(items);
-          writeLocal(K.media, items);
+    const unsubMedia = listenLoop(
+      (confirm, fatal) =>
+        subscribeMediaLibrary(
+          (items) => {
+            confirm();
+            setMedia(items);
+            writeLocal(K.media, items);
+          },
+          fatal,
+        ),
+      {
+        onError: (message) => {
+          setSyncStatus("error");
+          setSyncErrorOnce(message);
         },
-        failed,
-      ),
+        onRecover: () => {
+          setSyncStatus("synced");
+          setSyncErrorOnce(null);
+        },
+      },
     );
 
-    const stopReconnect = onReconnect(() => void pullOnce());
-    const goOffline = () => setSyncStatus((s) => (s === "synced" || s === "connecting" ? "offline" : s));
+    const recover = () => {
+      setSyncEpoch((e) => e + 1);
+    };
+    const goOnline = () => {
+      setSyncStatus((s2) => (s2 === "offline" ? "connecting" : s2));
+      recover();
+    };
+    const goOffline = () => setSyncStatus("offline");
+    const goVisible = () => {
+      if (document.visibilityState === "visible" && lastSyncError.current) recover();
+    };
+    window.addEventListener("online", goOnline);
     window.addEventListener("offline", goOffline);
+    document.addEventListener("visibilitychange", goVisible);
     return () => {
       cancelled = true;
       unsubSite();
       unsubMedia();
-      stopReconnect();
-      window.clearTimeout(convergeTimer.current);
+      window.removeEventListener("online", goOnline);
       window.removeEventListener("offline", goOffline);
+      document.removeEventListener("visibilitychange", goVisible);
     };
-  }, [cloudEnabled, applyRemote, pullOnce]);
+  }, [cloudEnabled, applyRemote, syncEpoch, setSyncErrorOnce]);
 
   // Keep other tabs of the same browser in sync (local mode and cache).
   useEffect(() => {
@@ -354,6 +363,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   /* ---------- auto-publish ---------- */
 
+  /**
+   * Writes the admin's `admins/{uid}` allow-list record. This is how the root
+   * administrator unlocks Cloud access without touching the Firebase console —
+   * the deployed security rules permit it only for the ROOT_ADMIN_EMAIL token.
+   */
+  const attemptAdminBootstrap = useCallback(async (): Promise<boolean> => {
+    const user = userRef.current;
+    if (!user || !cloudEnabled) return false;
+    try {
+      await writeAdminAllowList(user.uid, user.email ?? "");
+      return true;
+    } catch {
+      return false;
+    }
+  }, [cloudEnabled]);
+
   const flushToCloud = useCallback(async () => {
     cloudWriteTimer.current = 0;
     const snapshot = contentRef.current;
@@ -362,26 +387,44 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setUpdatedAt(stamp);
       writeLocal(K.updatedAt, stamp);
       setSaving(false);
+      pendingPush.current = false;
       return;
     }
     try {
-      const rev = revRef.current + 1;
-      const stamp = await pushSiteDocument(snapshot, userRef.current?.uid ?? "admin", rev);
-      revRef.current = rev;
-      ownPushStampRef.current = stamp;
+      const stamp = await pushSiteDocument(snapshot, userRef.current?.uid ?? "admin");
       setUpdatedAt(stamp);
       writeLocal(K.updatedAt, stamp);
       setSyncStatus("synced");
-      setSyncError(null);
+      setSyncErrorOnce(null);
+      pendingPush.current = false;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Cloud save failed.";
-      setSyncStatus("error");
-      setSyncError(msg);
-      notify("error", msg);
+      const raw = err instanceof Error ? err.message : "Cloud save failed.";
+      const permissionIssue = /permission|insufficient/i.test(raw);
+      if (permissionIssue && (await attemptAdminBootstrap())) {
+        // Rules are fine but the allow-list doc was missing — retry the same save.
+        try {
+          const stamp = await pushSiteDocument(snapshot, userRef.current?.uid ?? "admin");
+          setUpdatedAt(stamp);
+          writeLocal(K.updatedAt, stamp);
+          setSyncStatus("synced");
+          setSyncErrorOnce(null);
+          pendingPush.current = false;
+          return;
+        } catch (retryErr) {
+          const retryMsg = retryErr instanceof Error ? retryErr.message : raw;
+          setSyncStatus("error");
+          setSyncErrorOnce(retryMsg);
+          notify("error", retryMsg);
+        }
+      } else {
+        setSyncStatus("error");
+        setSyncErrorOnce(raw);
+        notify("error", raw);
+      }
     } finally {
       setSaving(false);
     }
-  }, [cloudEnabled, notify]);
+  }, [cloudEnabled, notify, attemptAdminBootstrap, setSyncErrorOnce]);
 
   const updateContent = useCallback(
     (recipe: (c: SiteContent) => SiteContent) => {
@@ -392,6 +435,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (err) notify("error", err);
         return next;
       });
+      pendingPush.current = true;
       setSaving(true);
       window.clearTimeout(cloudWriteTimer.current);
       cloudWriteTimer.current = window.setTimeout(() => void flushToCloud(), CLOUD_WRITE_DEBOUNCE_MS);
@@ -415,6 +459,79 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     updateContent(() => cloneContent(DEFAULT_CONTENT));
     notify("info", "Website content restored to the original defaults.");
   }, [updateContent, notify]);
+
+  /** Re-subscribes to every cloud listener and re-runs the initial pull. */
+  const retryCloud = useCallback(() => {
+    lastSyncError.current = "";
+    setSyncError(null);
+    setSyncEpoch((e) => e + 1);
+    setSyncStatus((s2) => (s2 === "error" ? "connecting" : s2));
+  }, []);
+
+  /**
+   * Probes every layer of the Firebase stack and reports exactly which setup
+   * step is broken, so an administrator can fix a deny-by-default Firestore
+   * database without guessing. When the write probe succeeds it also repairs
+   * the administrator's own `admins/{uid}` allow-list record.
+   */
+  const verifyCloud = useCallback(async (): Promise<CloudCheck[]> => {
+    const steps: CloudCheck[] = [];
+    const fb = getFirebase();
+    steps.push({
+      id: "init",
+      label: "Firebase project connected",
+      ok: Boolean(fb),
+      detail: fb ? "beyond-now-14935" : "Configuration failed — check the Vite environment variables.",
+    });
+
+    const user = userRef.current;
+    steps.push({
+      id: "auth",
+      label: "Signed in to Firebase Authentication",
+      ok: Boolean(user),
+      detail: user ? (user.email ?? undefined) : "Sign in again.",
+    });
+
+    let adminOk = false;
+    let adminDetail: string | undefined;
+    if (user) {
+      try {
+        await writeAdminAllowList(user.uid, user.email ?? "");
+        adminOk = true;
+      } catch (err) {
+        adminDetail = err instanceof Error ? err.message : "Cloud write rejected.";
+      }
+    } else {
+      adminDetail = "Sign in first.";
+    }
+    steps.push({
+      id: "admin",
+      label: "Administrator save permission",
+      ok: adminOk,
+      detail: adminOk
+        ? undefined
+        : `Firestore rejected the write (${adminDetail ?? "unknown error"}). Deploy the security rules from this project (npm run deploy:rules) and sign in with ${ADMIN_EMAIL}.`,
+    });
+
+    let readOk = false;
+    try {
+      await pullSiteDocument();
+      readOk = true;
+    } catch { /* covered by the remediation detail below */ }
+    steps.push({
+      id: "read",
+      label: "Website content publicly readable",
+      ok: readOk,
+      detail: readOk ? undefined : "firestore.rules grants public read access to site/main — deploy it (npm run deploy:rules).",
+    });
+
+    const healthy = Boolean(fb) && Boolean(user) && adminOk && readOk;
+    if (healthy) {
+      setSyncStatus("synced");
+      retryCloud();
+    }
+    return steps;
+  }, [retryCloud]);
 
   /* ---------- media ---------- */
 
@@ -599,8 +716,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       syncError,
       ready: authReady && contentReady,
       updateContent,
+      retryCloud,
+      verifyCloud,
       resetContent,
-      resync,
       uploadMedia,
       deleteMedia,
       replaceMedia,
@@ -615,7 +733,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }),
     [
       content, media, updatedAt, saving, account, isAuthed, isAdmin, cloudEnabled, syncStatus, syncError,
-      authReady, contentReady, updateContent, resetContent, resync, uploadMedia, deleteMedia, replaceMedia,
+      authReady, contentReady, updateContent, resetContent, uploadMedia, deleteMedia, replaceMedia,
       renameMedia, login, logout, updateAccount, changePassword, toasts, notify, dismissToast,
     ],
   );

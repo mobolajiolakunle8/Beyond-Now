@@ -71,13 +71,17 @@ const messageId = () => `m_${Date.now()}_${Math.random().toString(36).slice(2, 7
 
 /** Creates the user's thread if it does not exist yet. Safe to call repeatedly. */
 export async function ensureThread(profile: Pick<UserProfile, "uid" | "name" | "email" | "avatarUrl">): Promise<Thread> {
+  const ref = threadRef(profile.uid);
+  const snap = await getDoc(ref);
+  if (snap.exists()) return snap.data() as Thread;
+
   const now = Date.now();
   const thread: Thread = {
     id: profile.uid,
     userId: profile.uid,
-    userName: profile.name,
-    userEmail: profile.email,
-    userAvatar: profile.avatarUrl,
+    userName: profile.name || "",
+    userEmail: profile.email || "",
+    userAvatar: profile.avatarUrl || "",
     status: "open",
     lastMessage: "",
     lastSender: "",
@@ -87,15 +91,7 @@ export async function ensureThread(profile: Pick<UserProfile, "uid" | "name" | "
     createdAt: now,
     updatedAt: now,
   };
-
-  const ref = threadRef(profile.uid);
-  try {
-    const snap = await getDoc(ref);
-    if (snap.exists()) return snap.data() as Thread;
-    await setDoc(ref, thread);
-  } catch {
-    /* fallback to local thread structure */
-  }
+  await setDoc(ref, thread, { merge: true });
   return thread;
 }
 
@@ -153,24 +149,31 @@ export async function sendUserMessage(profile: UserProfile, text: string): Promi
     threadId: profile.uid,
     senderUid: user.uid,
     senderRole: "user",
-    senderName: profile.name,
+    senderName: profile.name || user.displayName || user.email?.split("@")[0] || "Member",
     text: body,
     createdAt: now,
   };
 
   const batch = writeBatch(fb.db);
   batch.set(doc(messagesCol(profile.uid), message.id), message);
-  batch.update(threadRef(profile.uid), {
-    userName: profile.name,
-    userAvatar: profile.avatarUrl,
-    lastMessage: body.slice(0, 200),
-    lastSender: "user",
-    lastMessageAt: now,
-    unreadByAdmin: increment(1),
-    status: "open",
-    updatedAt: now,
-  });
-  batch.update(doc(fb.db, "users", profile.uid), { "activity.messages": increment(1) });
+  batch.set(
+    threadRef(profile.uid),
+    {
+      id: profile.uid,
+      userId: profile.uid,
+      userName: profile.name || user.displayName || user.email?.split("@")[0] || "Member",
+      userEmail: profile.email || user.email || "",
+      userAvatar: profile.avatarUrl || "",
+      lastMessage: body.slice(0, 200),
+      lastSender: "user",
+      lastMessageAt: now,
+      unreadByAdmin: increment(1),
+      status: "open",
+      updatedAt: now,
+    },
+    { merge: true },
+  );
+  batch.set(doc(fb.db, "users", profile.uid), { activity: { messages: increment(1) } }, { merge: true });
   await batch.commit();
 }
 
@@ -191,14 +194,18 @@ export async function sendAdminMessage(thread: Thread, text: string, admin: { ui
 
   const batch = writeBatch(fb.db);
   batch.set(doc(messagesCol(thread.id), message.id), message);
-  batch.update(threadRef(thread.id), {
-    lastMessage: body.slice(0, 200),
-    lastSender: "admin",
-    lastMessageAt: now,
-    unreadByUser: increment(1),
-    status: "open",
-    updatedAt: now,
-  });
+  batch.set(
+    threadRef(thread.id),
+    {
+      lastMessage: body.slice(0, 200),
+      lastSender: "admin",
+      lastMessageAt: now,
+      unreadByUser: increment(1),
+      status: "open",
+      updatedAt: now,
+    },
+    { merge: true },
+  );
   await batch.commit();
 
   await pushNotification(thread.userId, {

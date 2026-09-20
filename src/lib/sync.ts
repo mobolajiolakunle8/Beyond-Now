@@ -23,16 +23,11 @@ import { processImageFile } from "@/lib/media";
 /**
  * The live website document. Every admin edit is written here directly —
  * there is no separate draft; what is stored is what visitors see.
- *
- * `rev` is a monotonically increasing version number maintained by the
- * clients (each write uses `max(rev seen) + 1`). Browsers compare revisions,
- * not clocks, so sync is correct even with skewed or equal timestamps.
  */
 export type SiteDocument = {
   published: SiteContent;
   updatedAt: string;
   updatedBy: string;
-  rev: number;
 };
 
 const SITE_DOC = "main";
@@ -76,12 +71,12 @@ export async function pullSiteDocument(): Promise<SiteDocument | null> {
 }
 
 /** Full-document write (not a merge) so fields removed from the schema are purged. */
-export async function pushSiteDocument(published: SiteContent, updatedBy: string, rev: number): Promise<string> {
+export async function pushSiteDocument(published: SiteContent, updatedBy: string): Promise<string> {
   const refDoc = siteRef();
   if (!refDoc) throw new Error("Firebase is not configured.");
   const updatedAt = new Date().toISOString();
   try {
-    const payload: SiteDocument = { published, updatedAt, updatedBy, rev };
+    const payload: SiteDocument = { published, updatedAt, updatedBy };
     await setDoc(refDoc, scrub(payload));
     return updatedAt;
   } catch (err) {

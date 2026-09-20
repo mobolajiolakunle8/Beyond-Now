@@ -13,23 +13,20 @@ service firebase.storage {
     function signedIn() {
       return request.auth != null;
     }
-
     function isAdmin() {
       return signedIn() && (
-        (request.auth.token.email != null && request.auth.token.email == 'beyondnow.ng@gmail.com') ||
         ('isAdmin' in request.auth.token && request.auth.token.isAdmin == true) ||
+        ('email' in request.auth.token && request.auth.token.email.lower() == 'beyondnow.ng@gmail.com') ||
         firestore.exists(/databases/(default)/documents/admins/$(request.auth.uid))
       );
     }
-
     function isImage() {
-      return request.resource.contentType.matches('image/.*');
+      return request.resource.contentType.matches('image/(jpeg|png|webp)');
     }
 
     match /media/{allPaths=**} {
       allow read: if true;
       allow write: if isAdmin() && isImage() && request.resource.size < 15 * 1024 * 1024;
-      allow delete: if isAdmin();
     }
 
     match /avatars/{userId}/{allPaths=**} {
