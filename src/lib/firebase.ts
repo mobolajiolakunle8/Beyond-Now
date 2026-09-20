@@ -138,18 +138,51 @@ export function authErrorMessage(err: unknown): string {
   }
 }
 
-export function firestoreErrorMessage(err: unknown): string {
-  const code =
-    err && typeof err === "object" && "code" in err ? String((err as { code: string }).code) : "";
+/** Extracts a Firebase error code such as `permission-denied` or `storage/unauthorized`. */
+export function firebaseErrorCode(err: unknown): string {
+  if (!err || typeof err !== "object") return "";
+  const code = "code" in err ? String((err as { code?: unknown }).code ?? "") : "";
+  if (code) return code.replace(/^firestore\//, "");
+  // Some SDK paths only expose the message ("Missing or insufficient permissions.").
+  const msg = err instanceof Error ? err.message : "";
+  if (/insufficient permissions|permission[- ]denied/i.test(msg)) return "permission-denied";
+  if (/unavailable|network/i.test(msg)) return "unavailable";
+  return "";
+}
+
+export function isPermissionError(err: unknown): boolean {
+  const code = firebaseErrorCode(err);
+  return code === "permission-denied" || code === "storage/unauthorized" || code === "storage/unauthenticated";
+}
+
+/**
+ * Translates a Firestore / Storage error into copy a person can act on.
+ *
+ * `audience` shapes the advice: administrators are told how to repair the
+ * project, members are reassured and told the team has been alerted.
+ */
+export function firestoreErrorMessage(err: unknown, audience: "admin" | "member" = "admin"): string {
+  const code = firebaseErrorCode(err);
 
   switch (code) {
     case "permission-denied":
-      return "Permission denied. Sign in as an administrator, or deploy the Firestore security rules.";
+    case "storage/unauthorized":
+      return audience === "admin"
+        ? `Firebase rejected the request. The security rules in this project have not been published yet, or you are not signed in as ${ADMIN_EMAIL}. Publish the rules (npm run deploy:rules) and retry.`
+        : "We couldn't reach your account data just now. This is a setup issue on our side, not yours — please try again in a moment.";
+    case "storage/unauthenticated":
+      return "Your session has expired. Please sign in again.";
     case "unavailable":
-      return "Firebase is temporarily unavailable. Your last local copy is still shown.";
+      return "Firebase is temporarily unreachable. Showing your last saved copy — we will reconnect automatically.";
+    case "failed-precondition":
+      return "Firestore needs an index for this query. Check the browser console for the one-click index link.";
+    case "resource-exhausted":
+      return "Firebase quota reached for today. Please try again later.";
     case "not-found":
-      return "Cloud document not found yet. It will be created on the next save.";
+      return "That record does not exist yet. It will be created on the next save.";
+    case "unauthenticated":
+      return "Your session has expired. Please sign in again.";
     default:
-      return err instanceof Error ? err.message : "Cloud sync failed.";
+      return err instanceof Error && err.message ? err.message : "Cloud sync failed. Please try again.";
   }
 }

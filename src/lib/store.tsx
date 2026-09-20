@@ -19,7 +19,7 @@ import {
   type User,
 } from "firebase/auth";
 import { DEFAULT_CONTENT, cloneContent, mergeContent, type MediaItem, type SiteContent } from "@/lib/content";
-import { ADMIN_EMAIL, ADMIN_NAME, authErrorMessage, getFirebase, isFirebaseConfigured } from "@/lib/firebase";
+import { ADMIN_EMAIL, ADMIN_NAME, authErrorMessage, firestoreErrorMessage, getFirebase, isFirebaseConfigured, isPermissionError } from "@/lib/firebase";
 import { processImageFile } from "@/lib/media";
 import {
   deleteMediaFromCloud,
@@ -273,7 +273,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       } catch (err) {
         if (cancelled) return;
         setSyncStatus("offline");
-        setSyncError(err instanceof Error && err.message === "timeout" ? "Firebase took too long. Showing cached content." : err instanceof Error ? err.message : "Could not reach Firebase.");
+        setSyncError(
+          err instanceof Error && err.message === "timeout"
+            ? "Firebase took too long. Showing cached content."
+            : firestoreErrorMessage(err, "admin"),
+        );
       } finally {
         if (!cancelled) setContentReady(true);
       }
@@ -398,8 +402,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setSyncErrorOnce(null);
       pendingPush.current = false;
     } catch (err) {
-      const raw = err instanceof Error ? err.message : "Cloud save failed.";
-      const permissionIssue = /permission|insufficient/i.test(raw);
+      const raw = firestoreErrorMessage(err, "admin");
+      const permissionIssue = isPermissionError(err);
       if (permissionIssue && (await attemptAdminBootstrap())) {
         // Rules are fine but the allow-list doc was missing — retry the same save.
         try {
@@ -411,7 +415,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           pendingPush.current = false;
           return;
         } catch (retryErr) {
-          const retryMsg = retryErr instanceof Error ? retryErr.message : raw;
+          const retryMsg = firestoreErrorMessage(retryErr, "admin");
           setSyncStatus("error");
           setSyncErrorOnce(retryMsg);
           notify("error", retryMsg);
@@ -499,7 +503,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         await writeAdminAllowList(user.uid, user.email ?? "");
         adminOk = true;
       } catch (err) {
-        adminDetail = err instanceof Error ? err.message : "Cloud write rejected.";
+        adminDetail = firestoreErrorMessage(err, "admin");
       }
     } else {
       adminDetail = "Sign in first.";
@@ -546,7 +550,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         try {
           added.push(cloudMedia ? await uploadMediaToCloud(file) : await processImageFile(file));
         } catch (err) {
-          notify("error", err instanceof Error ? err.message : "Upload failed.");
+          notify("error", firestoreErrorMessage(err, "admin"));
         }
       }
       if (!added.length) return [];
@@ -578,7 +582,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         notify("info", `"${target.name}" deleted from the media library.`);
       } catch (err) {
-        notify("error", err instanceof Error ? err.message : "Delete failed.");
+        notify("error", firestoreErrorMessage(err, "admin"));
       }
     },
     [cloudMedia, media, notify],
@@ -596,7 +600,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         notify("success", "Image replaced everywhere it was used.");
       } catch (err) {
-        notify("error", err instanceof Error ? err.message : "Replace failed.");
+        notify("error", firestoreErrorMessage(err, "admin"));
       }
     },
     [cloudMedia, media, notify],
@@ -614,7 +618,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           setMedia(next);
         }
       } catch (err) {
-        notify("error", err instanceof Error ? err.message : "Rename failed.");
+        notify("error", firestoreErrorMessage(err, "admin"));
       }
     },
     [cloudMedia, media, notify],

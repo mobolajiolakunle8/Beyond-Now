@@ -12,7 +12,7 @@ import {
   type Message,
   type Thread,
 } from "@/lib/chat";
-import { getFirebase } from "@/lib/firebase";
+import { firestoreErrorMessage, getFirebase } from "@/lib/firebase";
 import { listenLoop } from "@/lib/listen";
 import { formatDate, formatDateTime, relativeTime } from "@/lib/media";
 import { useStore } from "@/lib/store";
@@ -118,7 +118,7 @@ function Conversation({ uid, seed, className }: { uid: string; seed?: Pick<UserP
   const toggleStatus = async () => {
     if (!thread) return;
     const next = thread.status === "open" ? "resolved" : "open";
-    await setThreadStatus(uid, next).catch((err) => notify("error", err instanceof Error ? err.message : "Could not update status."));
+    await setThreadStatus(uid, next).catch((err) => notify("error", firestoreErrorMessage(err, "admin")));
   };
 
   return (
@@ -294,7 +294,7 @@ function UserDrawer({ user, onClose }: { user: UserProfile; onClose: () => void 
       await task();
       notify("success", ok);
     } catch (err) {
-      notify("error", err instanceof Error ? err.message : "Action failed.");
+      notify("error", firestoreErrorMessage(err, "admin"));
     } finally {
       setBusy(false);
       setConfirm(null);
@@ -551,7 +551,7 @@ export function ArticlesAdmin() {
       setEditing(null);
       notify("success", "Article saved.");
     } catch (err) {
-      notify("error", err instanceof Error ? err.message : "Could not save article.");
+      notify("error", firestoreErrorMessage(err, "admin"));
     }
   };
 
@@ -562,7 +562,7 @@ export function ArticlesAdmin() {
       await deleteDoc(doc(fb.db, "articles", id));
       notify("info", "Article deleted.");
     } catch (err) {
-      notify("error", err instanceof Error ? err.message : "Could not delete article.");
+      notify("error", firestoreErrorMessage(err, "admin"));
     } finally {
       setConfirmDelete(null);
     }

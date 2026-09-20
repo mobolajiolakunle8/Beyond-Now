@@ -106,13 +106,21 @@ export function UserStoreProvider({ children }: { children: ReactNode }) {
         const admin = await resolveIsAdmin(authedUser);
         if (cancelled) return;
         setIsAdmin(admin);
-        const p = await ensureUserRecords(authedUser, admin);
+        // Non-fatal: any rejected write is reported, the profile still resolves.
+        let issue: string | null = null;
+        const p = await ensureUserRecords(authedUser, admin, (m) => { issue = m; });
         if (cancelled) return;
         setProfile(p);
         // Every member gets a private thread the moment they sign in, so the
         // team can reach out first and the user never hits a "no thread" state.
-        if (!admin) await ensureThread(p);
-        setSyncErrorOnce(null);
+        if (!admin) {
+          try {
+            await ensureThread(p);
+          } catch (err) {
+            issue = issue ?? (err instanceof Error ? err.message : "Could not open your conversation.");
+          }
+        }
+        setSyncErrorOnce(issue);
       } catch (err) {
         if (!cancelled) setSyncErrorOnce(err instanceof Error ? err.message : "Could not load your account.");
       } finally {

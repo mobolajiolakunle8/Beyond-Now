@@ -3,6 +3,7 @@ import { AcctBtn, AcctField, AcctInput, AcctTextArea, Empty, PageTitle } from "@
 import { useUserStore } from "@/account/UserStore";
 import { markThreadRead, sendUserMessage } from "@/lib/chat";
 import { formatDate, formatDateTime, relativeTime } from "@/lib/media";
+import { firestoreErrorMessage } from "@/lib/firebase";
 import { useStore, useWa } from "@/lib/store";
 import {
   changeOwnPassword,
@@ -147,7 +148,7 @@ export function ProfilePage() {
       await task();
       setNotice({ tone: "success", msg: success });
     } catch (err) {
-      setNotice({ tone: "error", msg: err instanceof Error ? err.message : "Something went wrong." });
+      setNotice({ tone: "error", msg: firestoreErrorMessage(err, "member") });
     } finally {
       setBusy(false);
     }
@@ -555,7 +556,7 @@ export function SettingsPage() {
   const setPref = (patch: Partial<UserPreferences>) => {
     if (!authedUser) return;
     void updateOwnProfile(authedUser.uid, { preferences: { ...prefs, ...patch } }).catch((err) =>
-      setNotice({ tone: "error", msg: err instanceof Error ? err.message : "Could not save preference." }),
+      setNotice({ tone: "error", msg: firestoreErrorMessage(err, "member") }),
     );
   };
 

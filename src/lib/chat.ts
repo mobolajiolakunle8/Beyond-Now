@@ -11,7 +11,7 @@ import {
   writeBatch,
   type Unsubscribe,
 } from "firebase/firestore";
-import { getFirebase } from "@/lib/firebase";
+import { firestoreErrorMessage, getFirebase } from "@/lib/firebase";
 import { pushNotification } from "@/lib/users";
 
 /**
@@ -97,7 +97,11 @@ export async function ensureThread(info: ParticipantInfo): Promise<Thread> {
     createdAt: now,
     updatedAt: now,
   };
-  await setDoc(ref, thread, { merge: true });
+  try {
+    await setDoc(ref, thread, { merge: true });
+  } catch (err) {
+    throw new Error(firestoreErrorMessage(err, "member"));
+  }
   return thread;
 }
 
@@ -106,7 +110,7 @@ export function subscribeThread(uid: string, onChange: (thread: Thread | null) =
   return onSnapshot(
     threadRef(uid),
     (snap) => onChange(snap.exists() ? (snap.data() as Thread) : null),
-    (err) => onError?.(err.message),
+    (err) => onError?.(firestoreErrorMessage(err, "member")),
   );
 }
 
@@ -115,7 +119,7 @@ export function subscribeMessages(uid: string, onChange: (messages: Message[]) =
   return onSnapshot(
     query(messagesCol(uid), orderBy("createdAt", "asc"), limit(500)),
     (snap) => onChange(snap.docs.map((d) => d.data() as Message)),
-    (err) => onError?.(err.message),
+    (err) => onError?.(firestoreErrorMessage(err, "member")),
   );
 }
 
@@ -126,7 +130,7 @@ export function subscribeAllThreads(onChange: (threads: Thread[]) => void, onErr
   return onSnapshot(
     query(collection(fb.db, "threads"), orderBy("lastMessageAt", "desc"), limit(500)),
     (snap) => onChange(snap.docs.map((d) => d.data() as Thread)),
-    (err) => onError?.(err.message),
+    (err) => onError?.(firestoreErrorMessage(err, "admin")),
   );
 }
 
@@ -182,9 +186,13 @@ export async function sendUserMessage(info: ParticipantInfo, text: string): Prom
     },
     { merge: true },
   );
-  // Safely record user activity without failing if user document is pending
+  // Touch the profile so "last active" stays fresh; merge tolerates a pending doc.
   batch.set(doc(fb.db, "users", user.uid), { updatedAt: now }, { merge: true });
-  await batch.commit();
+  try {
+    await batch.commit();
+  } catch (err) {
+    throw new Error(firestoreErrorMessage(err, "member"));
+  }
 }
 
 /** Beyond Now → user. Increments the user's unread counter and drops an in-app notification. */
@@ -216,7 +224,11 @@ export async function sendAdminMessage(thread: Thread, text: string, admin: { ui
     },
     { merge: true },
   );
-  await batch.commit();
+  try {
+    await batch.commit();
+  } catch (err) {
+    throw new Error(firestoreErrorMessage(err, "admin"));
+  }
 
   await pushNotification(thread.userId, {
     kind: "message",

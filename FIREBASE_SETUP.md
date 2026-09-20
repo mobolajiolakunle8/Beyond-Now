@@ -8,30 +8,36 @@ every time you ship.
 
 ---
 
-## 1. Environment variables
+## 1. Environment files
 
-```bash
-cp .env.example .env
-```
+Vite picks the file by mode and bakes the values into the bundle **at build time**:
 
-`.env` is already filled for `beyond-now-14935`. Vite exposes only `VITE_*` vars.
+| File | Loaded by | Committed? |
+|---|---|---|
+| `.env.production` | `npm run build` → what Firebase Hosting serves | **Yes** |
+| `.env.development` | `npm run dev` | **Yes** |
+| `.env.local`, `.env.*.local` | personal overrides | No (git-ignored) |
+
+Both committed files are already filled in for `beyond-now-14935`. They contain
+the Firebase *web* config, which every browser downloads anyway — it is public
+by design and protected by `firestore.rules` / `storage.rules`, not by secrecy.
+Committing them is what guarantees a CI or teammate build produces a working
+site instead of "Firebase is not configured".
 
 | Variable | Purpose |
 |---|---|
 | `VITE_FIREBASE_API_KEY` | Web API key |
 | `VITE_FIREBASE_AUTH_DOMAIN` | `beyond-now-14935.firebaseapp.com` |
+| `VITE_FIREBASE_DATABASE_URL` | Realtime Database URL (reserved) |
 | `VITE_FIREBASE_PROJECT_ID` | `beyond-now-14935` |
 | `VITE_FIREBASE_STORAGE_BUCKET` | `beyond-now-14935.firebasestorage.app` |
 | `VITE_FIREBASE_MESSAGING_SENDER_ID` | Sender id |
 | `VITE_FIREBASE_APP_ID` | Web app id |
 | `VITE_FIREBASE_MEASUREMENT_ID` | Analytics (optional) |
-| `VITE_ADMIN_EMAIL` | Root administrator email (`beyondnow.ng@gmail.com`) |
-| `VITE_ADMIN_NAME` | Display name for the root administrator |
+| `VITE_ADMIN_EMAIL` | Root administrator (`beyondnow.ng@gmail.com`) |
+| `VITE_ADMIN_NAME` | Root administrator display name |
 
-`.env` is git-ignored. Commit `.env.example` only.
-
-If `.env` is missing, the app runs in **local mode** (content in the browser
-only; the admin signs in with `VITE_ADMIN_EMAIL` and any 8+ character password).
+`npm run preflight` verifies all of this before any deploy.
 
 ---
 
@@ -86,11 +92,16 @@ firebase deploy --only hosting:default
 `dist/`, rewrites every path to `index.html` (the app uses hash routing), and
 sets no-cache + security headers on the document.
 
-### Everything at once
+### Everything at once (recommended)
 
 ```bash
-npm run build && firebase deploy
+npm run deploy
 ```
+
+This runs, in order: **preflight → rules → build → hosting**. Rules go first
+on purpose — hosting is never shipped against a deny-all database, which is
+exactly what produces "Missing or insufficient permissions" after a deploy.
+If preflight finds a problem it aborts before anything is uploaded.
 
 ---
 
