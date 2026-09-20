@@ -33,6 +33,9 @@ export function Overview({ go }: { go: (route: string) => void }) {
   const publishedPacks = content.resources.filter((r) => r.status === "published").length;
   const mediaBytes = media.reduce((sum, m) => sum + m.size, 0);
 
+  // A permission-denied means the Firestore ruleset is still deny-all (not published).
+  const rulesLocked = /security rules|permission|insufficient/i.test(syncError ?? "");
+
   const sections = [
     { label: "Hero", detail: content.hero.headingLead, route: "content" },
     { label: "About & founder", detail: content.about.founderName, route: "content" },
@@ -59,32 +62,45 @@ export function Overview({ go }: { go: (route: string) => void }) {
           syncStatus === "error" ? "border-red-200 bg-red-50" : saving ? "border-sun bg-sun/10" : "border-teal/30 bg-teal/8",
         )}
       >
-        <div className="flex items-center gap-3">
-          <span className={cn("flex h-10 w-10 items-center justify-center rounded-xl text-lg", saving ? "bg-sun/30" : "bg-teal/20")}>
-            {saving ? "…" : "✓"}
+        <div className="flex flex-1 items-start gap-3">
+          <span
+            className={cn(
+              "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-lg",
+              saving ? "bg-sun/30" : syncStatus === "error" ? "bg-red-100 text-red-600" : "bg-teal/20",
+            )}
+          >
+            {saving ? "…" : syncStatus === "error" ? "!" : "✓"}
           </span>
-          <div>
+          <div className="min-w-0">
             <p className="font-display text-[0.95rem] font-bold text-navy">
-              {saving ? "Publishing your latest change…" : syncStatus === "error" ? "Your last change could not be synced" : "Website is live and up to date"}
+              {saving
+                ? "Publishing your latest change…"
+                : syncStatus === "error"
+                  ? rulesLocked
+                    ? "Cloud is locked — security rules not published"
+                    : "Cloud sync error"
+                  : "Website is live and up to date"}
             </p>
             <p className="text-[0.8rem] text-charcoal/60">
-              {syncError ?? (updatedAt ? `Last updated ${relativeTime(updatedAt)}` : "No edits yet")}
+              {syncStatus === "error"
+                ? "Run the cloud check below to see exactly what to fix — recovery is automatic once it passes."
+                : (syncError ?? (updatedAt ? `Last updated ${relativeTime(updatedAt)}` : "No edits yet"))}
               {cloudEnabled ? " · Firebase" : " · local mode"}
             </p>
           </div>
         </div>
+        {syncStatus === "error" && (
+          <AdminBtn size="sm" variant="primary" onClick={() => void runCheck()}>
+            {checking ? "Checking…" : "Run cloud check"}
+          </AdminBtn>
+        )}
       </div>
 
       {syncError && (
         <Card
           title="Cloud setup check"
-          description="One of the server checks below is failing. Run the check to see exactly what to fix, then everything recovers automatically."
+          description="Diagnose exactly which server step is blocking sync, then fix it — recovery is automatic."
           className="mb-5 border-red-200"
-          action={
-            <AdminBtn variant="primary" disabled={checking} onClick={() => void runCheck()}>
-              {checking ? "Checking…" : "Run cloud check"}
-            </AdminBtn>
-          }
         >
           {checks ? (
             <ul className="space-y-2.5">
@@ -106,12 +122,34 @@ export function Overview({ go }: { go: (route: string) => void }) {
               ))}
             </ul>
           ) : (
-            <p className="text-[0.85rem] leading-relaxed text-charcoal/65">
-              The most common cause: the database was created in production mode and the security rules have not been
-              deployed yet. From a terminal in this project run{" "}
-              <code className="rounded bg-bone px-1.5 py-0.5 font-semibold text-navy">npm run deploy:rules</code>, then
-              press Run cloud check — recovery is automatic, no refresh needed.
-            </p>
+            <div className="text-[0.85rem] leading-relaxed text-charcoal/70">
+              {rulesLocked ? (
+                <>
+                  <p>
+                    Your Firestore database is still in <strong>locked (deny-all) mode</strong> — the security rules
+                    have not been published. This is a one-time step; no code change fixes it.
+                  </p>
+                  <ol className="mt-3 list-decimal space-y-1.5 pl-5">
+                    <li>
+                      In a terminal in this project run{" "}
+                      <code className="rounded bg-bone px-1.5 py-0.5 font-semibold text-navy">npm run deploy:rules</code>
+                      , or
+                    </li>
+                    <li>
+                      In the <strong>Firebase Console → Firestore Database → Rules</strong>, paste the contents of{" "}
+                      <code className="rounded bg-bone px-1.5 py-0.5 font-semibold text-navy">firestore.rules</code> and
+                      click <strong>Publish</strong>.
+                    </li>
+                  </ol>
+                  <p className="mt-3">Then press <strong>Run cloud check</strong> — everything recovers automatically, no refresh needed.</p>
+                </>
+              ) : (
+                <p>
+                  Run the check to see which of the four server checks is failing, then fix that step and run the check
+                  again — recovery is automatic, no refresh needed.
+                </p>
+              )}
+            </div>
           )}
           <div className="mt-4 flex flex-wrap gap-2">
             <AdminBtn size="sm" variant="outline" onClick={retryCloud}>Retry now</AdminBtn>

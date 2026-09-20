@@ -109,7 +109,7 @@ function Conversation({ uid, seed, className }: { uid: string; seed?: Pick<UserP
       await sendAdminMessage(target, text, { uid: adminUid, name: adminName });
       setText("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Message could not be sent.");
+      setError(firestoreErrorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -118,7 +118,7 @@ function Conversation({ uid, seed, className }: { uid: string; seed?: Pick<UserP
   const toggleStatus = async () => {
     if (!thread) return;
     const next = thread.status === "open" ? "resolved" : "open";
-    await setThreadStatus(uid, next).catch((err) => notify("error", firestoreErrorMessage(err, "admin")));
+    await setThreadStatus(uid, next).catch((err) => notify("error", err instanceof Error ? err.message : "Could not update status."));
   };
 
   return (
@@ -294,7 +294,7 @@ function UserDrawer({ user, onClose }: { user: UserProfile; onClose: () => void 
       await task();
       notify("success", ok);
     } catch (err) {
-      notify("error", firestoreErrorMessage(err, "admin"));
+      notify("error", firestoreErrorMessage(err));
     } finally {
       setBusy(false);
       setConfirm(null);
@@ -521,7 +521,7 @@ export function ArticlesAdmin() {
     return onSnapshot(
       query(collection(fb.db, "articles"), orderBy("updatedAt", "desc"), limit(200)),
       (snap) => setArticles(snap.docs.map((d) => d.data() as Article)),
-      (err) => notify("error", err.message),
+      (err) => notify("error", firestoreErrorMessage(err)),
     );
   }, [notify]);
 
@@ -551,7 +551,7 @@ export function ArticlesAdmin() {
       setEditing(null);
       notify("success", "Article saved.");
     } catch (err) {
-      notify("error", firestoreErrorMessage(err, "admin"));
+      notify("error", firestoreErrorMessage(err));
     }
   };
 
@@ -562,7 +562,7 @@ export function ArticlesAdmin() {
       await deleteDoc(doc(fb.db, "articles", id));
       notify("info", "Article deleted.");
     } catch (err) {
-      notify("error", firestoreErrorMessage(err, "admin"));
+      notify("error", firestoreErrorMessage(err));
     } finally {
       setConfirmDelete(null);
     }

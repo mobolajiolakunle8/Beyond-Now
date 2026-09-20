@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { ensureThread, subscribeMessages, subscribeThread, type Message, type Thread } from "@/lib/chat";
 import { listenLoop } from "@/lib/listen";
-import { getFirebase } from "@/lib/firebase";
+import { firestoreErrorMessage, getFirebase } from "@/lib/firebase";
 import {
   buildProfile,
   ensureUserRecords,
@@ -106,23 +106,15 @@ export function UserStoreProvider({ children }: { children: ReactNode }) {
         const admin = await resolveIsAdmin(authedUser);
         if (cancelled) return;
         setIsAdmin(admin);
-        // Non-fatal: any rejected write is reported, the profile still resolves.
-        let issue: string | null = null;
-        const p = await ensureUserRecords(authedUser, admin, (m) => { issue = m; });
+        const p = await ensureUserRecords(authedUser, admin);
         if (cancelled) return;
         setProfile(p);
         // Every member gets a private thread the moment they sign in, so the
         // team can reach out first and the user never hits a "no thread" state.
-        if (!admin) {
-          try {
-            await ensureThread(p);
-          } catch (err) {
-            issue = issue ?? (err instanceof Error ? err.message : "Could not open your conversation.");
-          }
-        }
-        setSyncErrorOnce(issue);
+        if (!admin) await ensureThread(p);
+        setSyncErrorOnce(null);
       } catch (err) {
-        if (!cancelled) setSyncErrorOnce(err instanceof Error ? err.message : "Could not load your account.");
+        if (!cancelled) setSyncErrorOnce(firestoreErrorMessage(err));
       } finally {
         if (!cancelled) setAuthReady(true);
       }

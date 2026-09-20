@@ -7,10 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "preflight": "node scripts/preflight.mjs",
-    "deploy:rules": "firebase deploy --only firestore:rules,storage",
-    "deploy:hosting": "npm run preflight && npm run build && firebase deploy --only hosting",
-    "deploy": "npm run preflight && npm run deploy:rules && npm run build && firebase deploy --only hosting"
+    "deploy": "npm run build && firebase deploy --only firestore:rules,storage,hosting",
+    "deploy:rules": "firebase deploy --only firestore:rules,storage"
   },
   "dependencies": {
     "clsx": "2.1.1",

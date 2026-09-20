@@ -24,8 +24,10 @@ export function listenLoop(
     if (stopped) return;
     attempts += 1;
     callbacks.onError?.(message);
-    const delay = Math.min(30_000, 3_000 * attempts);
-    if (attempts <= 15) timer = window.setTimeout(start, delay);
+    // Ramp from 3s up to a steady 15s and retry indefinitely, so the listener
+    // recovers the moment rules are published or the network returns — no refresh.
+    const delay = Math.min(15_000, 3_000 * attempts);
+    timer = window.setTimeout(start, delay);
   };
 
   const start = () => {

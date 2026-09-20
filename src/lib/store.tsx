@@ -19,7 +19,7 @@ import {
   type User,
 } from "firebase/auth";
 import { DEFAULT_CONTENT, cloneContent, mergeContent, type MediaItem, type SiteContent } from "@/lib/content";
-import { ADMIN_EMAIL, ADMIN_NAME, authErrorMessage, firestoreErrorMessage, getFirebase, isFirebaseConfigured, isPermissionError } from "@/lib/firebase";
+import { ADMIN_EMAIL, ADMIN_NAME, authErrorMessage, firestoreErrorMessage, getFirebase, isFirebaseConfigured } from "@/lib/firebase";
 import { processImageFile } from "@/lib/media";
 import {
   deleteMediaFromCloud,
@@ -275,8 +275,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setSyncStatus("offline");
         setSyncError(
           err instanceof Error && err.message === "timeout"
-            ? "Firebase took too long. Showing cached content."
-            : firestoreErrorMessage(err, "admin"),
+            ? "Firebase took too long to respond. Showing cached content — retrying automatically."
+            : firestoreErrorMessage(err),
         );
       } finally {
         if (!cancelled) setContentReady(true);
@@ -402,8 +402,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setSyncErrorOnce(null);
       pendingPush.current = false;
     } catch (err) {
-      const raw = firestoreErrorMessage(err, "admin");
-      const permissionIssue = isPermissionError(err);
+      const raw = firestoreErrorMessage(err);
+      const code = err && typeof err === "object" && "code" in err ? String((err as { code: string }).code) : "";
+      const permissionIssue = code === "permission-denied" || /permission|insufficient/i.test(err instanceof Error ? err.message : "");
       if (permissionIssue && (await attemptAdminBootstrap())) {
         // Rules are fine but the allow-list doc was missing — retry the same save.
         try {
@@ -415,7 +416,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           pendingPush.current = false;
           return;
         } catch (retryErr) {
-          const retryMsg = firestoreErrorMessage(retryErr, "admin");
+          const retryMsg = firestoreErrorMessage(retryErr);
           setSyncStatus("error");
           setSyncErrorOnce(retryMsg);
           notify("error", retryMsg);
@@ -503,7 +504,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         await writeAdminAllowList(user.uid, user.email ?? "");
         adminOk = true;
       } catch (err) {
-        adminDetail = firestoreErrorMessage(err, "admin");
+        adminDetail = "write rejected — " + firestoreErrorMessage(err);
       }
     } else {
       adminDetail = "Sign in first.";
@@ -550,7 +551,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         try {
           added.push(cloudMedia ? await uploadMediaToCloud(file) : await processImageFile(file));
         } catch (err) {
-          notify("error", firestoreErrorMessage(err, "admin"));
+          notify("error", firestoreErrorMessage(err));
         }
       }
       if (!added.length) return [];
@@ -582,7 +583,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         notify("info", `"${target.name}" deleted from the media library.`);
       } catch (err) {
-        notify("error", firestoreErrorMessage(err, "admin"));
+        notify("error", firestoreErrorMessage(err));
       }
     },
     [cloudMedia, media, notify],
@@ -600,7 +601,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         notify("success", "Image replaced everywhere it was used.");
       } catch (err) {
-        notify("error", firestoreErrorMessage(err, "admin"));
+        notify("error", firestoreErrorMessage(err));
       }
     },
     [cloudMedia, media, notify],
@@ -618,7 +619,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           setMedia(next);
         }
       } catch (err) {
-        notify("error", firestoreErrorMessage(err, "admin"));
+        notify("error", firestoreErrorMessage(err));
       }
     },
     [cloudMedia, media, notify],

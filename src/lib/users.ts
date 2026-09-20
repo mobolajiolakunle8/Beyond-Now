@@ -203,47 +203,28 @@ export async function writeAdminAllowList(uid: string, email: string, grantedBy 
  * Guarantees the signed-in user has a profile document (covers accounts that
  * were created before the profile seed existed) and, for administrators,
  * that their role and allow-list record are in place.
- *
- * This is deliberately best-effort: a member must be able to use the app the
- * instant they sign in, even while the cloud is misconfigured. Any write that
- * Firestore rejects is reported through `onIssue` rather than thrown, and the
- * caller always receives a usable profile (falling back to the auth record).
  */
-export async function ensureUserRecords(
-  user: User,
-  isAdmin: boolean,
-  onIssue?: (message: string) => void,
-): Promise<UserProfile> {
-  const fallback = buildProfile(user.uid, user.email ?? "", displayNameFor(user));
-  if (isAdmin) fallback.role = "admin";
-
+export async function ensureUserRecords(user: User, isAdmin: boolean): Promise<UserProfile> {
   const ref = userRef(user.uid);
-  let profile: UserProfile = fallback;
+  const snap = await getDoc(ref);
+  let profile: UserProfile;
 
-  try {
-    const snap = await getDoc(ref);
-    if (!snap.exists()) {
-      await setDoc(ref, fallback);
-    } else {
-      const existing = snap.data() as UserProfile;
-      const patch: Partial<UserProfile> = { lastSeenAt: Date.now() };
-      if (isAdmin && existing.role !== "admin") patch.role = "admin";
-      // setDoc+merge tolerates documents created by older builds with missing fields.
-      await setDoc(ref, patch, { merge: true });
-      profile = { ...fallback, ...existing, ...patch };
-    }
-  } catch (err) {
-    onIssue?.(firestoreErrorMessage(err, isAdmin ? "admin" : "member"));
+  if (!snap.exists()) {
+    profile = buildProfile(user.uid, user.email ?? "", displayNameFor(user));
+    if (isAdmin) profile.role = "admin";
+    await setDoc(ref, profile);
+  } else {
+    profile = snap.data() as UserProfile;
+    const patch: Partial<UserProfile> = { lastSeenAt: Date.now() };
+    if (isAdmin && profile.role !== "admin") patch.role = "admin";
+    await updateDoc(ref, patch);
+    profile = { ...profile, ...patch };
   }
 
   if (isAdmin) {
-    // The allow-list write is what unlocks admin access under the rules.
-    // The root email is permitted to create its own record.
-    try {
-      const admin = await getDoc(adminRef(user.uid));
-      if (!admin.exists()) await writeAdminAllowList(user.uid, user.email ?? "", "bootstrap");
-    } catch (err) {
-      onIssue?.(firestoreErrorMessage(err, "admin"));
+    const admin = await getDoc(adminRef(user.uid));
+    if (!admin.exists()) {
+      await writeAdminAllowList(user.uid, user.email ?? "", "bootstrap");
     }
   }
 
@@ -265,7 +246,7 @@ export function subscribeProfile(uid: string, onChange: (p: UserProfile | null) 
   return onSnapshot(
     userRef(uid),
     (snap) => onChange(snap.exists() ? (snap.data() as UserProfile) : null),
-    (err) => onError?.(firestoreErrorMessage(err, "member")),
+    (err) => onError?.(firestoreErrorMessage(err)),
   );
 }
 
@@ -335,7 +316,7 @@ export function subscribeAllUsers(onChange: (users: UserProfile[]) => void, onEr
   return onSnapshot(
     query(collection(fb.db, "users"), orderBy("createdAt", "desc")),
     (snap) => onChange(snap.docs.map((d) => d.data() as UserProfile)),
-    (err) => onError?.(firestoreErrorMessage(err, "admin")),
+    (err) => onError?.(firestoreErrorMessage(err)),
   );
 }
 
@@ -368,7 +349,7 @@ export function subscribeSaved(uid: string, onChange: (items: SavedItem[]) => vo
   return onSnapshot(
     query(savedCol(uid), orderBy("savedAt", "desc")),
     (snap) => onChange(snap.docs.map((d) => d.data() as SavedItem)),
-    (err) => onError?.(firestoreErrorMessage(err, "member")),
+    (err) => onError?.(firestoreErrorMessage(err)),
   );
 }
 
@@ -399,7 +380,7 @@ export function subscribeNotifications(uid: string, onChange: (items: Notificati
   return onSnapshot(
     query(notifCol(uid), orderBy("createdAt", "desc")),
     (snap) => onChange(snap.docs.map((d) => d.data() as NotificationItem)),
-    (err) => onError?.(firestoreErrorMessage(err, "member")),
+    (err) => onError?.(firestoreErrorMessage(err)),
   );
 }
 

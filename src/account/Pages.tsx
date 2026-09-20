@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AcctBtn, AcctField, AcctInput, AcctTextArea, Empty, PageTitle } from "@/account/ui";
 import { useUserStore } from "@/account/UserStore";
 import { markThreadRead, sendUserMessage } from "@/lib/chat";
-import { formatDate, formatDateTime, relativeTime } from "@/lib/media";
 import { firestoreErrorMessage } from "@/lib/firebase";
+import { formatDate, formatDateTime, relativeTime } from "@/lib/media";
 import { useStore, useWa } from "@/lib/store";
 import {
   changeOwnPassword,
@@ -148,7 +148,7 @@ export function ProfilePage() {
       await task();
       setNotice({ tone: "success", msg: success });
     } catch (err) {
-      setNotice({ tone: "error", msg: firestoreErrorMessage(err, "member") });
+      setNotice({ tone: "error", msg: firestoreErrorMessage(err) });
     } finally {
       setBusy(false);
     }
@@ -251,7 +251,7 @@ export function MessagesPage() {
       await sendUserMessage(sender, text);
       setText("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Your message could not be sent. Please try again.");
+      setError(firestoreErrorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -556,7 +556,7 @@ export function SettingsPage() {
   const setPref = (patch: Partial<UserPreferences>) => {
     if (!authedUser) return;
     void updateOwnProfile(authedUser.uid, { preferences: { ...prefs, ...patch } }).catch((err) =>
-      setNotice({ tone: "error", msg: firestoreErrorMessage(err, "member") }),
+      setNotice({ tone: "error", msg: firestoreErrorMessage(err) }),
     );
   };
 
