@@ -14,6 +14,7 @@ import {
 } from "@/lib/chat";
 import { databaseErrorMessage, getFirebase } from "@/lib/firebase";
 import { listenLoop } from "@/lib/listen";
+import { updateSafeguardingCase, type SafeguardingCase } from "@/lib/audit";
 import { formatDate, formatDateTime, relativeTime } from "@/lib/media";
 import { useStore } from "@/lib/store";
 import { adminSetUserRole, adminSetUserStatus, type UserProfile } from "@/lib/users";
@@ -89,7 +90,7 @@ function Conversation({ uid, seed, className }: { uid: string; seed?: Pick<UserP
 
   useEffect(() => {
     if (thread && thread.unreadByAdmin > 0) void markThreadRead(uid, "admin").catch(() => undefined);
-  }, [uid, thread?.unreadByAdmin]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [uid, thread?.unreadByAdmin]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
@@ -204,7 +205,9 @@ export function UsersAdmin() {
       if (filter === "active" && u.status !== "active") return false;
       if (filter === "suspended" && u.status !== "suspended") return false;
       if (filter === "admin" && u.role !== "admin") return false;
-      return !needle || u.email.toLowerCase().includes(needle) || u.name.toLowerCase().includes(needle) || u.bio.toLowerCase().includes(needle);
+      if (!needle) return true;
+      const haystack = `${u.email ?? ""} ${u.name ?? ""} ${u.bio ?? ""}`.toLowerCase();
+      return haystack.includes(needle);
     });
   }, [users, q, filter]);
 
@@ -264,7 +267,7 @@ export function UsersAdmin() {
                     <td className="px-4 py-3"><StatusBadge status={u.status === "active" ? "published" : "draft"} /></td>
                     <td className="px-4 py-3 text-charcoal/65">{formatDate(u.createdAt)}</td>
                     <td className="px-4 py-3 text-charcoal/65">{relativeTime(u.lastSeenAt)}</td>
-                    <td className="px-4 py-3 text-right text-charcoal/65">{u.activity.saved} saved · {u.activity.messages} msgs</td>
+                    <td className="px-4 py-3 text-right text-charcoal/65">{u.activity?.saved ?? 0} saved · {u.activity?.messages ?? 0} msgs</td>
                     <td className="px-4 py-3 text-right">
                       <AdminBtn size="sm" variant="outline" onClick={() => setSelected(u)}>Open</AdminBtn>
                     </td>
@@ -333,8 +336,8 @@ function UserDrawer({ user, onClose }: { user: UserProfile; onClose: () => void 
                 ["Status", <StatusBadge key="status" status={user.status === "active" ? "published" : "draft"} />],
                 ["Joined", formatDateTime(user.createdAt)],
                 ["Last seen", relativeTime(user.lastSeenAt)],
-                ["Saved resources", String(user.activity.saved)],
-                ["Messages sent", String(user.activity.messages)],
+                ["Saved resources", String(user.activity?.saved ?? 0)],
+                ["Messages sent", String(user.activity?.messages ?? 0)],
               ].map(([k, v]) => (
                 <div key={String(k)} className="flex items-center justify-between gap-3 py-2">
                   <dt className="text-[0.78rem] text-charcoal/55">{k}</dt>
@@ -489,6 +492,186 @@ export function MessagesAdmin() {
           <EmptyState icon="✉" title="Select a conversation" body="Pick a member on the left to read their messages and reply in real time." />
         )}
       </div>
+    </div>
+  );
+}
+
+/* ============================ SAFEGUARDING ============================ */
+
+const CASE_LABELS: Record<SafeguardingCase["status"], string> = {
+  open: "Open",
+  escalated: "Escalated",
+  resolved: "Resolved",
+};
+void CASE_LABELS;
+
+/**
+ * Safeguarding queue. Shows automatically-screened conversations that a
+ * trained lead must review. Screening is a triage aid — a human decision is
+ * always required, and statutory reporting duties sit outside this tool.
+ */
+export function SafeguardingAdmin() {
+  const { account, notify } = useStore();
+  const [cases, setCases] = useState<SafeguardingCase[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<"open" | "escalated" | "resolved" | "all">("all");
+  const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    const fb = getFirebase();
+    if (!fb) return;
+    const unsub = onValue(
+      ref(fb.rtdb, "safeguardingCases"),
+      (snap) => {
+        if (!snap.exists()) {
+          setCases([]);
+          return;
+        }
+        const all = Object.values(snap.val() as Record<string, SafeguardingCase>);
+        setCases(all.sort((a, b) => b.createdAt - a.createdAt));
+      },
+      (err) => setError(databaseErrorMessage(err)),
+    );
+    return unsub;
+  }, []);
+
+  const visible = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return cases.filter((c) => {
+      if (filter !== "all" && c.status !== filter) return false;
+      return !needle || c.userName.toLowerCase().includes(needle) || c.userEmail.toLowerCase().includes(needle);
+    });
+  }, [cases, filter, query]);
+
+  const act = async (c: SafeguardingCase, status: SafeguardingCase["status"], notes?: string) => {
+    if (!account?.uid) return;
+    try {
+      await updateSafeguardingCase(
+        c.id,
+        { status, notes, assignedTo: account.email },
+        { uid: account.uid, email: account.email },
+      );
+      notify("success", `Case marked ${status}.`);
+    } catch (err) {
+      notify("error", err instanceof Error ? err.message : "Could not update case.");
+    }
+  };
+
+  const openCount = cases.filter((c) => c.status !== "resolved").length;
+
+  return (
+    <div>
+      <PageHeader
+        title="Safeguarding"
+        description={
+          openCount
+            ? `${openCount} case${openCount === 1 ? "" : "s"} need review. Automatic screening is a triage aid — a trained lead must assess every case.`
+            : "Automatically screened conversations appear here for review by a trained lead."
+        }
+      />
+
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <SearchInput value={query} onChange={setQuery} placeholder="Search by member…" />
+        <div className="flex gap-1 rounded-lg border border-mist bg-white p-1">
+          {(["all", "open", "escalated", "resolved"] as const).map((key) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setFilter(key)}
+              className={cn(
+                "rounded-md px-3 py-1.5 font-display text-[0.78rem] font-semibold capitalize transition-colors",
+                filter === key ? "bg-navy text-white" : "text-charcoal/60 hover:text-navy",
+              )}
+            >
+              {key}
+              <span className="ml-1.5 opacity-60">
+                {key === "all" ? cases.length : cases.filter((c) => c.status === key).length}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {error && (
+        <p role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-[0.82rem] text-red-700">
+          {error}
+        </p>
+      )}
+
+      {visible.length === 0 ? (
+        <EmptyState
+          icon="⛨"
+          title={cases.length ? "No cases match" : "No safeguarding cases"}
+          body={
+            cases.length
+              ? "Try a different filter."
+              : "Conversations flagged by automatic screening appear here for a trained lead to review."
+          }
+        />
+      ) : (
+        <ul className="space-y-3">
+          {visible.map((c) => (
+            <li
+              key={c.id}
+              className={cn("rounded-2xl border bg-white p-5", c.level === "urgent" ? "border-red-300" : "border-sun/40")}
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={cn(
+                        "rounded-full px-2.5 py-0.5 font-display text-[0.64rem] font-bold tracking-[0.08em] uppercase",
+                        c.level === "urgent" ? "bg-red-100 text-red-700" : "bg-sun/20 text-[#8a6500]",
+                      )}
+                    >
+                      {c.level}
+                    </span>
+                    <span className="rounded-full bg-mist px-2.5 py-0.5 font-display text-[0.64rem] font-bold tracking-[0.08em] text-charcoal/70 uppercase">
+                      {CASE_LABELS[c.status]}
+                    </span>
+                    <span className="text-[0.75rem] text-charcoal/55">{relativeTime(c.createdAt)}</span>
+                  </div>
+                  <p className="mt-2 font-display text-[0.98rem] font-bold text-navy">
+                    {c.userName} · <span className="font-normal text-charcoal/60">{c.userEmail}</span>
+                  </p>
+                  <p className="mt-2 rounded-lg border border-mist bg-bone/50 px-3 py-2 text-[0.86rem] italic text-charcoal/75">
+                    &ldquo;{c.excerpt}&rdquo;
+                  </p>
+                  {c.categories.length > 0 && (
+                    <p className="mt-2 text-[0.74rem] text-charcoal/55">Categories: {c.categories.join(", ")}</p>
+                  )}
+                  {c.notes && (
+                    <p className="mt-2 border-t border-mist pt-2 text-[0.82rem] text-charcoal/70">
+                      <span className="font-semibold text-navy">Case note:</span> {c.notes}
+                    </p>
+                  )}
+                </div>
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  {c.status !== "escalated" && c.status !== "resolved" && (
+                    <AdminBtn size="sm" variant="ghost" className="text-[#8a6500]" onClick={() => void act(c, "escalated")}>
+                      Escalate
+                    </AdminBtn>
+                  )}
+                  {c.status !== "resolved" && (
+                    <AdminBtn size="sm" variant="teal" onClick={() => void act(c, "resolved")}>
+                      Mark resolved
+                    </AdminBtn>
+                  )}
+                  <AdminBtn size="sm" variant="outline" onClick={() => (window.location.hash = "#/admin/messages")}>
+                    Open chat
+                  </AdminBtn>
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <p className="mt-6 rounded-2xl border border-mist bg-bone/50 p-4 text-[0.78rem] leading-relaxed text-charcoal/60">
+        <strong className="text-navy">Operational note.</strong> Keyword screening is a first-pass triage aid only. It
+        produces false negatives and false positives, and must never replace professional judgement or statutory
+        reporting duties. Every case here requires review by a trained safeguarding lead.
+      </p>
     </div>
   );
 }

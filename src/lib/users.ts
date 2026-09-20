@@ -11,9 +11,9 @@ import {
   type UserCredential,
 } from "firebase/auth";
 import { get, onValue, push, ref, remove, set, update, type Unsubscribe } from "firebase/database";
-import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from "firebase/storage";
+import { deleteObject, getDownloadURL, ref as storageRef } from "firebase/storage";
 import { ADMIN_EMAIL, authErrorMessage, databaseErrorMessage, getFirebase } from "@/lib/firebase";
-import { processImageFile } from "@/lib/media";
+import { ICON_SOURCE_BYTES, processImageFile, uploadResumable, withTimeout, type UploadHooks } from "@/lib/media";
 
 /* -------------------------------------------------------------------------- */
 /*                                   Types                                    */
@@ -95,6 +95,43 @@ export function buildProfile(uid: string, email: string, name: string): UserProf
   };
 }
 
+/**
+ * Display-side normalization for user records read from the database.
+ *
+ * Records can be schema-incomplete: older accounts predate fields like
+ * `activity`, console-edited nodes can miss keys, and denied reads can leave
+ * partial objects behind. Reading `activity.saved` on such a record used to
+ * crash the whole admin Users page, so every consumer gets a fully-shaped
+ * profile here. This is render-only and is NEVER written back — the server
+ * rules remain the source of truth for roles and status.
+ */
+export function normalizeProfile(raw: unknown): UserProfile {
+  const r = (raw ?? {}) as Partial<UserProfile> & Record<string, unknown>;
+  const activity = (r.activity ?? {}) as Partial<UserProfile["activity"]>;
+  const preferences = (r.preferences ?? {}) as Partial<UserPreferences>;
+  return {
+    uid: typeof r.uid === "string" ? r.uid : "",
+    email: typeof r.email === "string" ? r.email : "",
+    name: typeof r.name === "string" ? r.name : "",
+    role: r.role === "admin" ? "admin" : "user",
+    status: r.status === "suspended" ? "suspended" : "active",
+    bio: typeof r.bio === "string" ? r.bio : "",
+    avatarUrl: typeof r.avatarUrl === "string" ? r.avatarUrl : "",
+    preferences: {
+      notifyMessages: preferences.notifyMessages ?? true,
+      notifyResources: preferences.notifyResources ?? false,
+    },
+    activity: {
+      saved: Number(activity.saved) || 0,
+      messages: Number(activity.messages) || 0,
+      notifications: Number(activity.notifications) || 0,
+    },
+    createdAt: Number(r.createdAt) || 0,
+    updatedAt: Number(r.updatedAt) || 0,
+    lastSeenAt: Number(r.lastSeenAt) || 0,
+  };
+}
+
 function displayNameFor(user: User): string {
   return user.displayName?.trim() || user.email?.split("@")[0] || "Member";
 }
@@ -112,6 +149,8 @@ export async function signUp(input: { email: string; password: string; name: str
     if (input.name.trim()) await fbUpdateProfile(cred.user, { displayName: name });
     const profile = buildProfile(cred.user.uid, cred.user.email ?? input.email, name);
     await set(ref(fb.rtdb, `users/${cred.user.uid}`), profile).catch(() => undefined);
+    // Delivered immediately after account creation, not deferred to a listener.
+    await sendWelcome(cred.user.uid, name).catch(() => undefined);
     return cred;
   } catch (err) {
     throw new Error(authErrorMessage(err));
@@ -183,7 +222,7 @@ export async function ensureUserRecords(user: User, isAdmin: boolean): Promise<U
       if (isAdmin) profile.role = "admin";
       await set(userNode, profile).catch(() => undefined);
     } else {
-      profile = snap.val() as UserProfile;
+      profile = normalizeProfile(snap.val());
       const patch: Partial<UserProfile> = { lastSeenAt: Date.now() };
       if (isAdmin && profile.role !== "admin") patch.role = "admin";
       await update(userNode, patch).catch(() => undefined);
@@ -210,7 +249,7 @@ export async function fetchProfile(uid: string): Promise<UserProfile | null> {
   if (!fb) return null;
   try {
     const snap = await get(ref(fb.rtdb, `users/${uid}`));
-    return snap.exists() ? (snap.val() as UserProfile) : null;
+    return snap.exists() ? normalizeProfile(snap.val()) : null;
   } catch {
     return null;
   }
@@ -228,7 +267,7 @@ export function subscribeProfile(
       ref(fb.rtdb, `users/${uid}`),
       (snap) => {
         if (snap.exists()) {
-          onChange(snap.val() as UserProfile);
+          onChange(normalizeProfile(snap.val()));
         } else {
           onChange(null);
         }
@@ -274,24 +313,40 @@ export async function changeOwnPassword(current: string, next: string): Promise<
 
 const AVATAR_EXTS = ["webp", "png", "jpg", "jpeg"] as const;
 
-export async function uploadAvatar(uid: string, file: File): Promise<string> {
+export async function uploadAvatar(uid: string, file: File, hooks: UploadHooks = {}): Promise<string> {
   const fb = getFirebase();
   if (!fb) throw new Error("Firebase is not configured.");
   if (!/^image\/(jpe?g|png|webp)$/.test(file.type)) throw new Error("Profile picture must be JPG, PNG or WebP.");
-  if (file.size > 5 * 1024 * 1024) throw new Error("Profile picture must be under 5 MB.");
+  if (file.size > ICON_SOURCE_BYTES) throw new Error("Profile picture must be under 5 MB.");
 
-  const processed = await processImageFile(file);
-  const blob = await (await fetch(processed.dataUrl)).blob();
-  const ext = blob.type === "image/png" ? "png" : "webp";
-  const path = `avatars/${uid}/avatar.${ext}`;
+  hooks.onProgress?.({ loaded: 10, total: 100, percent: 10 });
+  const processed = await processImageFile(file, { profile: "icon", preserveTransparency: true });
+  hooks.onProgress?.({ loaded: 50, total: 100, percent: 50 });
 
-  await uploadBytes(storageRef(fb.storage, path), blob, {
-    contentType: blob.type,
-    cacheControl: "public, max-age=300",
-  });
-  const url = await getDownloadURL(storageRef(fb.storage, path));
-  await updateOwnProfile(uid, { avatarUrl: url });
-  return url;
+  let avatarUrl = processed.dataUrl;
+  try {
+    const ext = processed.type === "image/png" ? "png" : "webp";
+    const path = `avatars/${uid}/avatar.${ext}`;
+    const sRef = storageRef(fb.storage, path);
+    const blob = await (await fetch(processed.dataUrl)).blob();
+    await withTimeout(
+      uploadResumable(sRef, blob, {
+        contentType: blob.type || "image/webp",
+        cacheControl: "public, max-age=300",
+      }, { ...hooks, timeoutMs: 2500 }),
+      2500,
+      "Storage timeout",
+    );
+    avatarUrl = await withTimeout(getDownloadURL(sRef), 2000, "URL timeout");
+  } catch {
+    // Storage 404 or disabled -> use the 512x512 compressed WebP dataUrl directly!
+    avatarUrl = processed.dataUrl;
+  }
+
+  hooks.onProgress?.({ loaded: 85, total: 100, percent: 85 });
+  await updateOwnProfile(uid, { avatarUrl });
+  hooks.onProgress?.({ loaded: 100, total: 100, percent: 100 });
+  return avatarUrl;
 }
 
 export async function removeAvatar(uid: string): Promise<void> {
@@ -318,8 +373,11 @@ export function subscribeAllUsers(
       ref(fb.rtdb, "users"),
       (snap) => {
         if (snap.exists()) {
-          const raw = snap.val() as Record<string, UserProfile>;
-          const list = Object.values(raw).sort((a, b) => b.createdAt - a.createdAt);
+          const raw = snap.val() as Record<string, unknown>;
+          const list = Object.values(raw)
+            .map((item) => normalizeProfile(item))
+            .filter((item) => item.uid !== "")
+            .sort((a, b) => b.createdAt - a.createdAt);
           onChange(list);
         } else {
           onChange([]);
@@ -486,7 +544,7 @@ export async function sendWelcome(uid: string, name: string): Promise<void> {
   await pushNotification(uid, {
     kind: "system",
     title: `Welcome${name ? `, ${name.split(" ")[0]}` : ""}!`,
-    body: "You can now save resources, track your progress and message the Beyond Now team privately.",
+    body: "Beyond Now is a trusted space to understand what you feel, choose your next step and move forward. Your conversations are private and will not be shared without your permission, except where we believe you or someone else may face immediate serious harm — then we will work with you to find safe support.",
     href: "#/account/dashboard",
   });
 }

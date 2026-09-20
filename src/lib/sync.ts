@@ -1,9 +1,9 @@
 import { get, onValue, ref, remove, set, update, type Unsubscribe } from "firebase/database";
-import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes, type UploadMetadata } from "firebase/storage";
+import { deleteObject, getDownloadURL, ref as storageRef, type UploadMetadata } from "firebase/storage";
 import type { MediaItem, SiteContent } from "@/lib/content";
 import { uid } from "@/lib/content";
 import { databaseErrorMessage, getFirebase } from "@/lib/firebase";
-import { processImageFile } from "@/lib/media";
+import { processImageFile, uploadResumable, withTimeout, DB_WRITE_TIMEOUT_MS, type ImageProcessOptions, type UploadHooks } from "@/lib/media";
 
 export type SiteDocument = {
   published: SiteContent;
@@ -93,6 +93,9 @@ export function cloudToMediaItem(item: CloudMedia): MediaItem {
     width: item.width,
     height: item.height,
     size: item.size,
+    originalSize: item.originalSize,
+    originalWidth: item.originalWidth,
+    originalHeight: item.originalHeight,
     type: item.type,
     uploadedAt: item.uploadedAt,
   };
@@ -144,43 +147,66 @@ export function subscribeMediaLibrary(
   }
 }
 
-export async function uploadMediaToCloud(file: File): Promise<MediaItem> {
+export async function uploadMediaToCloud(file: File, options?: ImageProcessOptions, hooks: UploadHooks = {}): Promise<MediaItem> {
   const fb = getFirebase();
   if (!fb) throw new Error("Firebase is not configured.");
 
-  const processed = await processImageFile(file);
-  const blob = await (await fetch(processed.dataUrl)).blob();
+  hooks.onProgress?.({ loaded: 10, total: 100, percent: 10 });
+  const processed = await processImageFile(file, options);
+  hooks.onProgress?.({ loaded: 50, total: 100, percent: 50 });
 
   const id = processed.id || uid();
-  const ext = blob.type === "image/png" ? "png" : blob.type === "image/webp" ? "webp" : "jpg";
-  const path = `${STORAGE_PREFIX}/${id}.${ext}`;
-  const sRef = storageRef(fb.storage, path);
+  let url = processed.dataUrl;
+  let storagePath = "";
 
-  const meta: UploadMetadata = {
-    contentType: blob.type || file.type || "image/jpeg",
-    customMetadata: {
-      originalName: file.name,
-      width: String(processed.width),
-      height: String(processed.height),
-    },
-  };
+  // Attempt Cloud Storage with a fast 2.5s timeout. If unavailable (e.g. 404 bucket),
+  // seamlessly fall back to storing the compressed WebP dataUrl in RTDB.
+  try {
+    const ext = processed.type === "image/png" ? "png" : "webp";
+    const path = `${STORAGE_PREFIX}/${id}.${ext}`;
+    const sRef = storageRef(fb.storage, path);
+    const blob = await (await fetch(processed.dataUrl)).blob();
+    const meta: UploadMetadata = {
+      contentType: blob.type || "image/webp",
+      customMetadata: {
+        originalName: file.name,
+        width: String(processed.width),
+        height: String(processed.height),
+      },
+    };
+    await withTimeout(uploadResumable(sRef, blob, meta, { ...hooks, timeoutMs: 2500 }), 2500, "Storage timeout");
+    url = await withTimeout(getDownloadURL(sRef), 2000, "URL timeout");
+    storagePath = path;
+  } catch {
+    // Storage is not provisioned or failed: use the already-compressed WebP dataUrl!
+    url = processed.dataUrl;
+    storagePath = "";
+  }
 
-  await uploadBytes(sRef, blob, meta);
-  const url = await getDownloadURL(sRef);
+  hooks.onProgress?.({ loaded: 80, total: 100, percent: 80 });
 
   const cloud: CloudMedia = {
     id,
     name: file.name,
     url,
-    storagePath: path,
+    storagePath,
     width: processed.width,
     height: processed.height,
-    size: blob.size,
-    type: blob.type || file.type,
+    size: processed.size,
+    originalSize: processed.originalSize,
+    originalWidth: processed.originalWidth,
+    originalHeight: processed.originalHeight,
+    type: processed.type,
     uploadedAt: new Date().toISOString(),
   };
 
-  await set(ref(fb.rtdb, `media/${id}`), cloud);
+  await withTimeout(
+    set(ref(fb.rtdb, `media/${id}`), cloud),
+    DB_WRITE_TIMEOUT_MS,
+    `Saving "${file.name}" to the media library took too long. Please try again.`,
+  );
+
+  hooks.onProgress?.({ loaded: 100, total: 100, percent: 100 });
   return cloudToMediaItem(cloud);
 }
 
@@ -212,7 +238,7 @@ export async function renameMediaInCloud(id: string, name: string): Promise<void
   await update(ref(db, `media/${id}`), { name });
 }
 
-export async function replaceMediaInCloud(id: string, file: File): Promise<MediaItem> {
+export async function replaceMediaInCloud(id: string, file: File, options?: ImageProcessOptions, hooks: UploadHooks = {}): Promise<MediaItem> {
   const fb = getFirebase();
   if (!fb) throw new Error("Firebase is not configured.");
 
@@ -228,30 +254,57 @@ export async function replaceMediaInCloud(id: string, file: File): Promise<Media
     // ignore
   }
 
-  const processed = await processImageFile(file);
+  hooks.onProgress?.({ loaded: 10, total: 100, percent: 10 });
+  const processed = await processImageFile(file, options);
   processed.id = id;
-  const blob = await (await fetch(processed.dataUrl)).blob();
-  const ext = blob.type === "image/png" ? "png" : blob.type === "image/webp" ? "webp" : "jpg";
-  const path = `${STORAGE_PREFIX}/${id}.${ext}`;
+  hooks.onProgress?.({ loaded: 50, total: 100, percent: 50 });
 
-  await uploadBytes(storageRef(fb.storage, path), blob, {
-    contentType: blob.type || file.type,
-    customMetadata: { originalName: file.name },
-  });
-  const url = await getDownloadURL(storageRef(fb.storage, path));
+  let url = processed.dataUrl;
+  let storagePath = "";
+
+  try {
+    const ext = processed.type === "image/png" ? "png" : "webp";
+    const path = `${STORAGE_PREFIX}/${id}.${ext}`;
+    const sRef = storageRef(fb.storage, path);
+    const blob = await (await fetch(processed.dataUrl)).blob();
+    await withTimeout(
+      uploadResumable(sRef, blob, {
+        contentType: blob.type || "image/webp",
+        customMetadata: { originalName: file.name },
+      }, { ...hooks, timeoutMs: 2500 }),
+      2500,
+      "Storage timeout",
+    );
+    url = await withTimeout(getDownloadURL(sRef), 2000, "URL timeout");
+    storagePath = path;
+  } catch {
+    url = processed.dataUrl;
+    storagePath = "";
+  }
+
+  hooks.onProgress?.({ loaded: 80, total: 100, percent: 80 });
 
   const cloud: CloudMedia = {
     id,
     name: file.name,
     url,
-    storagePath: path,
+    storagePath,
     width: processed.width,
     height: processed.height,
-    size: blob.size,
-    type: blob.type || file.type,
+    size: processed.size,
+    originalSize: processed.originalSize,
+    originalWidth: processed.originalWidth,
+    originalHeight: processed.originalHeight,
+    type: processed.type,
     uploadedAt: new Date().toISOString(),
   };
 
-  await set(ref(fb.rtdb, `media/${id}`), cloud);
+  await withTimeout(
+    set(ref(fb.rtdb, `media/${id}`), cloud),
+    DB_WRITE_TIMEOUT_MS,
+    `Saving the replacement for "${file.name}" took too long. Please try again.`,
+  );
+
+  hooks.onProgress?.({ loaded: 100, total: 100, percent: 100 });
   return cloudToMediaItem(cloud);
 }

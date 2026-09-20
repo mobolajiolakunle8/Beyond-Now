@@ -12,6 +12,7 @@ import {
   TextInput,
 } from "@/admin/ui";
 import { getPath, setPath, uid, type SiteContent } from "@/lib/content";
+import type { ImageProcessOptions } from "@/lib/media";
 import { useStore } from "@/lib/store";
 import { cn } from "@/utils/cn";
 
@@ -20,6 +21,8 @@ type FieldDef = {
   label: string;
   type: "text" | "textarea" | "image" | "list" | "listLong";
   hint?: string;
+  dimensions?: string;
+  uploadOptions?: ImageProcessOptions;
   rows?: number;
   half?: boolean;
 };
@@ -84,7 +87,7 @@ const GROUPS: Group[] = [
       { path: "hero.trust", label: "Trust line items", type: "list" },
       { path: "hero.quote", label: "Promise quote", type: "text" },
       { path: "hero.quoteLabel", label: "Promise label", type: "text" },
-      { path: "hero.imageMain", label: "Hero image", type: "image" },
+      { path: "hero.imageMain", label: "Hero image", type: "image", dimensions: "Recommended 1400 × 1750 px · portrait 4:5" },
       { path: "hero.imageMainAlt", label: "Image alt text", type: "text" },
     ],
   },
@@ -100,7 +103,7 @@ const GROUPS: Group[] = [
       { path: "about.founderEyebrow", label: "Founder block eyebrow", type: "text", half: true },
       { path: "about.founderName", label: "Founder name / title", type: "text", half: true },
       { path: "about.founderQuote", label: "Founder's vision quote", type: "textarea", rows: 4 },
-      { path: "about.imageMain", label: "Photo", type: "image" },
+      { path: "about.imageMain", label: "Photo", type: "image", dimensions: "Recommended 1200 × 1500 px · portrait 4:5" },
       { path: "about.imageMainAlt", label: "Photo alt text", type: "text" },
     ],
   },
@@ -218,6 +221,8 @@ function FieldRenderer({
         <ImagePicker
           label={def.label}
           hint={def.hint}
+          dimensions={def.dimensions}
+          uploadOptions={def.uploadOptions}
           value={typeof raw === "string" ? raw : ""}
           onChange={(url) => set(def.path, url)}
         />

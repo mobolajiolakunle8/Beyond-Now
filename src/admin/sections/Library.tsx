@@ -8,22 +8,30 @@ import {
   ImagePicker,
   PageHeader,
   SearchInput,
+  StatusBadge,
   TextArea,
   TextInput,
+  Toggle,
   useImg,
 } from "@/admin/ui";
 import { LogoMark } from "@/components/Logo";
 import { setPath, uid, type SiteContent } from "@/lib/content";
-import { ACCEPT_ATTR, formatBytes, formatDate } from "@/lib/media";
+import { ACCEPT_ATTR, compressionLabel, formatBytes, formatDate } from "@/lib/media";
 import { useStore } from "@/lib/store";
 import { cn } from "@/utils/cn";
 
 /* =========================== MEDIA LIBRARY =========================== */
 
 export function MediaLibraryPage({ toolbar }: { toolbar?: ReactNode }) {
-  const { media, uploadMedia, deleteMedia, replaceMedia, renameMedia } = useStore();
+  const { media, uploadMedia, deleteMedia, replaceMedia, renameMedia, notify } = useStore();
   const [query, setQuery] = useState("");
   const [dragging, setDragging] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState<number | null>(null);
+  const [uploadLabel, setUploadLabel] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [replacingId, setReplacingId] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
@@ -34,15 +42,53 @@ export function MediaLibraryPage({ toolbar }: { toolbar?: ReactNode }) {
   const results = media.filter((m) => m.name.toLowerCase().includes(q));
   const totalBytes = media.reduce((sum, m) => sum + m.size, 0);
 
+  const startUpload = async (files: FileList | File[] | null, replacementFor?: string) => {
+    const list = files ? Array.from(files) : [];
+    if (!list.length || uploading) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setUploading(true);
+    setUploadError(null);
+    setProgress(10);
+    setUploadLabel(list.length === 1 ? list[0].name : `${list.length} images`);
+    if (replacementFor) setReplacingId(replacementFor);
+    try {
+      if (replacementFor && list[0]) {
+        await replaceMedia(replacementFor, list[0], undefined, {
+          signal: controller.signal,
+          onProgress: (p) => setProgress(p.percent),
+        });
+      } else {
+        await uploadMedia(list, undefined, {
+          signal: controller.signal,
+          onProgress: (p) => setProgress(p.percent),
+        });
+      }
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        const message = err instanceof Error ? err.message : "Upload failed. Please try again.";
+        setUploadError(message);
+        notify("error", message);
+      }
+    } finally {
+      abortRef.current = null;
+      setUploading(false);
+      setProgress(null);
+      setUploadLabel(null);
+      setReplacingId(null);
+      replaceTarget.current = null;
+    }
+  };
+
   return (
     <div>
       <PageHeader
         title="Media Library"
-        description="Upload images straight from this device. JPG, PNG and WebP are supported — no external image links needed."
+        description="Upload images straight from this device. JPG, PNG and WebP are resized and auto-compressed before storage."
       >
         {toolbar}
-        <AdminBtn variant="primary" onClick={() => uploadRef.current?.click()}>
-          Upload images
+        <AdminBtn variant="primary" onClick={() => uploadRef.current?.click()} disabled={uploading}>
+          {uploading ? `Uploading… ${progress ?? 0}%` : "Upload images"}
         </AdminBtn>
       </PageHeader>
 
@@ -53,7 +99,7 @@ export function MediaLibraryPage({ toolbar }: { toolbar?: ReactNode }) {
         multiple
         className="hidden"
         onChange={(e) => {
-          void uploadMedia(e.target.files ?? []);
+          void startUpload(e.target.files);
           e.target.value = "";
         }}
       />
@@ -63,12 +109,11 @@ export function MediaLibraryPage({ toolbar }: { toolbar?: ReactNode }) {
         accept={ACCEPT_ATTR}
         className="hidden"
         onChange={(e) => {
+          const target = replaceTarget.current;
           const file = e.target.files?.[0];
-          if (file && replaceTarget.current) {
-            void replaceMedia(replaceTarget.current, file);
-          }
-          replaceTarget.current = null;
           e.target.value = "";
+          replaceTarget.current = null;
+          if (file && target) void startUpload([file], target);
         }}
       />
 
@@ -81,7 +126,7 @@ export function MediaLibraryPage({ toolbar }: { toolbar?: ReactNode }) {
         onDrop={(e) => {
           e.preventDefault();
           setDragging(false);
-          void uploadMedia(e.dataTransfer.files);
+          void startUpload(e.dataTransfer.files);
         }}
         className={cn(
           "mb-5 rounded-2xl border-2 border-dashed px-6 py-8 text-center transition-colors",
@@ -92,13 +137,37 @@ export function MediaLibraryPage({ toolbar }: { toolbar?: ReactNode }) {
           Drag and drop images here, or browse your device
         </p>
         <p className="mt-1 text-[0.82rem] text-charcoal/55">
-          Large photos are automatically resized for fast loading. Maximum 12MB per file.
+          Recommended 1600 × 1200 px or larger · 12 MB source max · auto-compressed to WebP (max 1600 px edge).
         </p>
-        <div className="mt-4 flex justify-center">
-          <AdminBtn variant="outline" size="sm" onClick={() => uploadRef.current?.click()}>
-            Choose files
-          </AdminBtn>
-        </div>
+        {uploading && progress !== null ? (
+          <div className="mx-auto mt-4 max-w-md">
+            <div className="h-2 overflow-hidden rounded-full bg-mist" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} aria-label={uploadLabel ? `Uploading ${uploadLabel}` : "Uploading images"}>
+              <div className="h-full rounded-full bg-teal transition-all duration-200" style={{ width: `${progress}%` }} />
+            </div>
+            <p className="mt-2 text-[0.8rem] text-charcoal/60">
+              Uploading{uploadLabel ? ` ${uploadLabel}` : ""}… {progress}%
+            </p>
+            <div className="mt-2 flex justify-center">
+              <AdminBtn variant="ghost" size="sm" className="text-red-600" onClick={() => abortRef.current?.abort()}>
+                Cancel upload
+              </AdminBtn>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4 flex justify-center">
+            <AdminBtn variant="outline" size="sm" onClick={() => uploadRef.current?.click()}>
+              Choose files
+            </AdminBtn>
+          </div>
+        )}
+        {uploadError && !uploading && (
+          <div className="mx-auto mt-4 flex max-w-md items-start justify-between gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-left">
+            <p role="alert" className="text-[0.8rem] leading-snug text-red-700">{uploadError}</p>
+            <button type="button" onClick={() => uploadRef.current?.click()} className="shrink-0 font-display text-[0.75rem] font-semibold text-navy hover:underline">
+              Retry
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -144,8 +213,17 @@ export function MediaLibraryPage({ toolbar }: { toolbar?: ReactNode }) {
                   </div>
                   <div className="flex justify-between gap-2">
                     <dt>Size</dt>
-                    <dd className="font-medium text-charcoal/75">{formatBytes(item.size)}</dd>
+                    <dd className="font-medium text-charcoal/75">
+                      {formatBytes(item.size)}
+                      {item.originalSize ? ` · ${compressionLabel(item.originalSize, item.size)}` : ""}
+                    </dd>
                   </div>
+                  {item.originalWidth && item.originalHeight && (item.originalWidth !== item.width || item.originalHeight !== item.height) && (
+                    <div className="flex justify-between gap-2">
+                      <dt>Original</dt>
+                      <dd className="font-medium text-charcoal/75">{item.originalWidth} × {item.originalHeight}</dd>
+                    </div>
+                  )}
                   <div className="flex justify-between gap-2">
                     <dt>Uploaded</dt>
                     <dd className="font-medium text-charcoal/75">{formatDate(item.uploadedAt)}</dd>
@@ -158,12 +236,13 @@ export function MediaLibraryPage({ toolbar }: { toolbar?: ReactNode }) {
                   <AdminBtn
                     size="sm"
                     variant="outline"
+                    disabled={uploading}
                     onClick={() => {
                       replaceTarget.current = item.id;
                       replaceRef.current?.click();
                     }}
                   >
-                    Replace
+                    {replacingId === item.id && uploading ? `Replacing… ${progress ?? 0}%` : "Replace"}
                   </AdminBtn>
                   <AdminBtn size="sm" variant="ghost" className="ml-auto text-red-600" onClick={() => setConfirmId(item.id)}>
                     Delete
@@ -285,8 +364,10 @@ export function SettingsPage({ toolbar }: { toolbar?: ReactNode }) {
             </Field>
             <ImagePicker
               label="Favicon"
-              hint="Square PNG works best"
+               hint="512 × 512 px square · PNG or WebP"
               aspect="aspect-square"
+               dimensions="512 × 512 px square"
+               uploadOptions={{ profile: "icon", preserveTransparency: true }}
               value={settings.favicon}
               onChange={(v) => set("settings.favicon", v)}
             />
@@ -341,9 +422,11 @@ export function SettingsPage({ toolbar }: { toolbar?: ReactNode }) {
               {logoUnlocked && (
                 <div className="mt-4">
                   <ImagePicker
-                    label="Upload official logo"
-                    hint="PNG with transparency recommended"
+                    label="Upload official logo from this device"
+                    hint="1200 × 400 px · transparent PNG or WebP"
                     aspect="aspect-[3/1]"
+                    dimensions="1200 × 400 px · 3:1 horizontal lockup"
+                    uploadOptions={{ profile: "logo", preserveTransparency: true }}
                     value={brand.logoUrl}
                     onChange={(v) => {
                       set("brand.logoUrl", v);
@@ -421,6 +504,127 @@ export function SettingsPage({ toolbar }: { toolbar?: ReactNode }) {
           notify("info", "Reverted to the built-in logo mark.");
         }}
       />
+    </div>
+  );
+}
+
+/* ======================== MEMBER RESOURCE LIBRARY ======================== */
+
+/**
+ * Administrators can build and preview the member Library here before making
+ * it visible. The Resources admin page manages the packs; this page controls
+ * the member-facing release switch and presentation copy.
+ */
+export function MemberLibraryAdmin({ toolbar }: { toolbar?: ReactNode }) {
+  const { content, updateContent } = useStore();
+  const { library, resources } = content;
+  const [query, setQuery] = useState("");
+
+  const setLibrary = (patch: Partial<typeof library>) =>
+    updateContent((current) => ({ ...current, library: { ...current.library, ...patch } }));
+
+  const q = query.trim().toLowerCase();
+  const packs = resources.filter((track) =>
+    !q ||
+    track.label.toLowerCase().includes(q) ||
+    track.audience.toLowerCase().includes(q) ||
+    track.items.some((item) => item.title.toLowerCase().includes(q)),
+  );
+  const resourceCount = resources.reduce(
+    (total, track) => total + track.items.filter((item) => item.status === "published").length,
+    0,
+  );
+
+  return (
+    <div>
+      <PageHeader
+        title="Member Library"
+        description="Prepare and preview the resource catalogue here. Members only see it after you activate it."
+      >
+        {toolbar}
+      </PageHeader>
+
+      <div className="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
+        <Card
+          title="Library activation"
+          description="This switch controls the Library entry in every member account."
+        >
+          <Toggle
+            checked={library.enabled}
+            onChange={(enabled) => setLibrary({ enabled })}
+            label={library.enabled ? "Library is active for registered members" : "Library is hidden behind Coming soon"}
+          />
+          <div className={cn("mt-5 rounded-xl border p-4", library.enabled ? "border-teal/30 bg-teal/10" : "border-sun/30 bg-sun/10")}>
+            <p className={cn("font-display text-[0.9rem] font-bold", library.enabled ? "text-teal-ink" : "text-[#8a6500]")}>
+              {library.enabled ? "Members can browse and save resources now." : "Members currently see the Coming soon screen."}
+            </p>
+            <p className="mt-1 text-[0.8rem] leading-relaxed text-charcoal/65">
+              You can edit packs in Resources at any time. Activation is saved and published automatically.
+            </p>
+          </div>
+
+          <div className="mt-6 grid gap-4">
+            <Field label="Library title">
+              <TextInput value={library.title} onChange={(title) => setLibrary({ title })} />
+            </Field>
+            <Field label="Library description">
+              <TextArea rows={3} value={library.description} onChange={(description) => setLibrary({ description })} />
+            </Field>
+            <Field label="Coming soon title">
+              <TextInput value={library.comingSoonTitle} onChange={(comingSoonTitle) => setLibrary({ comingSoonTitle })} />
+            </Field>
+            <Field label="Coming soon message">
+              <TextArea rows={3} value={library.comingSoonBody} onChange={(comingSoonBody) => setLibrary({ comingSoonBody })} />
+            </Field>
+          </div>
+        </Card>
+
+        <Card
+          title="Administrator preview"
+          description={`${resources.length} pack${resources.length === 1 ? "" : "s"} · ${resourceCount} published resource${resourceCount === 1 ? "" : "s"}. This preview is always available to administrators.`}
+          action={<a href="#/admin/resources" className="font-display text-[0.8rem] font-semibold text-navy hover:text-teal-ink">Manage packs →</a>}
+        >
+          <SearchInput value={query} onChange={setQuery} placeholder="Search the member library…" />
+          {packs.length === 0 ? (
+            <div className="mt-5"><EmptyState title="No packs match" body="Try a different search term or create a pack in Resources." /></div>
+          ) : (
+            <ul className="mt-5 space-y-3">
+              {packs.map((track) => {
+                const previewItems = track.items;
+                return (
+                  <li key={track.id} className="rounded-xl border border-mist bg-bone/40 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="font-display text-[1rem] font-bold text-navy">{track.label}</p>
+                        <p className="text-[0.78rem] text-teal-ink">{track.audience}</p>
+                        <p className="mt-2 text-[0.84rem] leading-relaxed text-charcoal/65">{track.intro}</p>
+                      </div>
+                      <StatusBadge status={track.status} />
+                    </div>
+                    <ul className="mt-4 divide-y divide-mist border-t border-mist">
+                      {previewItems.length === 0 ? (
+                        <li className="py-3 text-[0.8rem] text-charcoal/55">No resources in this pack yet.</li>
+                      ) : (
+                        previewItems.map((item) => (
+                          <li key={item.id} className="flex items-start justify-between gap-3 py-3">
+                            <span>
+                              <span className="block font-display text-[0.85rem] font-semibold text-navy">{item.title}</span>
+                              <span className="block text-[0.76rem] leading-relaxed text-charcoal/60">{item.detail}</span>
+                            </span>
+                            <span className={cn("rounded-full px-2 py-1 text-[0.65rem] font-semibold", item.status === "published" ? "bg-white text-teal-ink" : "bg-sun/20 text-[#8a6500]")}>
+                              {item.status === "published" ? "Live" : "Draft"}
+                            </span>
+                          </li>
+                        ))
+                      )}
+                    </ul>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </Card>
+      </div>
     </div>
   );
 }

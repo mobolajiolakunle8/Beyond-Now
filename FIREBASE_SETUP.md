@@ -42,7 +42,8 @@ only; the admin signs in with `VITE_ADMIN_EMAIL` and any 8+ character password).
    `beyondnow.ng@gmail.com` + a strong password.
    ⚠️ Do this **before** the site is public — the root-admin rule matches on
    this email, so it must belong to you.
-3. **Firestore Database → Create database** → production mode → choose a region.
+3. **Realtime Database → Create Database** → use the default location. Confirm its URL is
+   `https://beyond-now-14935-default-rtdb.firebaseio.com/`.
 4. **Storage → Get started** (default bucket).
 
 ---
@@ -78,11 +79,11 @@ npm run deploy:rules
 
 ```bash
 npm run build
-firebase deploy --only hosting:default
+firebase deploy --only hosting
 ```
 
-`firebase deploy --only hosting` is equivalent — `.firebaserc` maps the
-`default` hosting target to `beyond-now-14935`. `firebase.json` serves
+`firebase deploy --only hosting` deploys directly to `beyond-now-14935`.
+`firebase.json` serves
 `dist/`, rewrites every path to `index.html` (the app uses hash routing), and
 sets no-cache + security headers on the document.
 
@@ -102,13 +103,39 @@ browser — visitors and admins — receives it through a realtime listener.
 
 | Action | Effect |
 |---|---|
-| Edit any field | Saved locally instantly; pushed to Firestore after ~1 s |
+| Edit any field | Saved locally instantly; pushed to Realtime Database after ~1 s |
 | Close the tab mid-edit | Pending write is flushed on `pagehide` |
 | Firebase unreachable | Public site keeps rendering from cache; admin sees **Sync error** |
 | Hide a story / resource | Removed from the public page immediately |
 
 The header badge shows **Publishing…** while a write is in flight and **Live**
 once it has landed.
+
+### Media processing
+
+All local uploads are processed in the browser before storage. The dashboard
+shows the final dimensions, original dimensions when resized, original bytes,
+final bytes and percentage saved.
+
+| Upload | Recommended dimensions | Processing profile |
+|---|---:|---|
+| CMS photography / story images | 1600 × 900 px or higher | Longest edge capped at 1600 px; WebP at quality 0.82 |
+| Hero image | 1400 × 1750 px (4:5) | Longest edge capped at 1600 px |
+| About image | 1200 × 1500 px (4:5) | Longest edge capped at 1600 px |
+| Official logo | 1200 × 400 px (3:1) | Longest edge capped at 1200 px; transparent PNG preserved |
+| Favicon / avatar | 512 × 512 px square | Longest edge capped at 512 px; transparent PNG preserved |
+
+The official logo is uploaded locally under **Admin → Site Settings → Official
+logo**. Unlocking that panel is a deliberate safety step; the local file picker
+uploads it to the media library and preserves its aspect ratio everywhere it is
+rendered.
+
+### Member Library release
+
+Administrators can prepare packs in **Admin → Resources** at any time. In
+**Admin → Member Library**, they can preview the exact member catalogue while
+it remains private, edit the Coming soon copy, then activate it with one switch.
+Until activated, the member Library displays only the Coming soon state.
 
 ---
 
@@ -120,7 +147,7 @@ once it has landed.
 4. `/#/account/signup` in a private window → create a member → **Messages** → send.
 5. Admin **Messages** shows the thread with a **1 new** badge instantly; reply.
 6. Member sees the reply and a notification without refreshing.
-7. `/#/admin` as the member → "Administrators only" screen (and Firestore denies writes).
+7. `/#/admin` as the member → "Administrators only" screen (and Realtime Database denies admin writes).
 
 ---
 
@@ -129,6 +156,6 @@ once it has landed.
 - [ ] Email/Password enabled
 - [ ] Root admin user created (`beyondnow.ng@gmail.com`)
 - [ ] `database.rules.json` + `storage.rules` published
-- [ ] `npm run build && firebase deploy --only hosting:default`
+- [ ] `npm run deploy`
 - [ ] `.env` not committed
 - [ ] Admin password rotated after first sign-in (Admin → Admin Account)

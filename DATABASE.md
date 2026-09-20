@@ -26,6 +26,7 @@ Firebase Realtime Database (RTDB)
 └── threads/{uid}                  One private conversation per member
     ├── meta                       Thread status & unread counts
     └── messages/{messageId}       Realtime chat messages
+└── storySubmissions/{uid}/{id}    Private member story submissions
 
 Cloud Storage
 ├── media/{mediaId}.{webp|png|jpg} CMS images
@@ -191,6 +192,25 @@ in (or by an administrator who wants to reach out first).
 | `unreadByAdmin` | number | Incremented by member messages; reset when an admin opens the thread |
 | `createdAt`, `updatedAt` | number (ms) | |
 
+### 3.7 `storySubmissions/{uid}/{submissionId}` — private story review queue
+
+Members submit stories from **My Account → Share your story**. Only the author
+and administrators can read the original. An administrator can review it,
+leave a private note, decline it, or publish a sanitised member-only story.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | string | Realtime Database push id |
+| `userId` | string | Author uid; validated against the parent path |
+| `authorName` | string | Private reviewer reference |
+| `category`, `title`, `story` | string | Original submission; story is 40–10,000 characters |
+| `identity` | `"anonymous"` \| `"firstName"` | How a published version may be credited |
+| `consentToPublish` | boolean | Must be `true` before submitting |
+| `status` | `"submitted"` \| `"reviewing"` \| `"published"` \| `"declined"` | Members cannot change it after submission |
+| `adminNote` | string | Private notification text for the author |
+| `submittedAt`, `reviewedAt` | number (ms) \| `null` | |
+| `reviewedBy` | string | Administrator uid |
+
 #### 3.6.1 `threads/{uid}/messages/{messageId}`
 
 Immutable once written (only admins may moderate).
@@ -224,6 +244,7 @@ Only the shape is listed; every value is editable in **Admin → Website Content
 | `storiesSection` | `eyebrow`, `headingLead`, `headingAccent`, `lead`, `shareLabel` |
 | `stories[]` | `id`, `category`, `title`, `who`, `teaser`, `body[]`, `lesson`, `accent`, `image`, `imageAlt`, `link`, `status`, `updatedAt` |
 | `resources[]` | `id`, `label`, `audience`, `intro`, `status`, `updatedAt`, `items[] {id,title,detail,link,status}` |
+| `library` | `enabled`, `title`, `description`, `comingSoonTitle`, `comingSoonBody`; controls the member-facing Library release switch |
 | `finalCta` | `eyebrow`, `heading`, `body`, `whatsappLabel`, `emailLabel`, `accountTitle`, `accountBody`, `accountCta`, `safetyNote` |
 | `footer` | `blurb`, `quote`, `safeguarding`, `coreMessage`, `tagline` |
 | `settings` | `email`, `whatsapp`, `whatsappDisplay`, `seoTitle`, `seoDescription`, `favicon`, `socials[] {id,label,url}` |
@@ -256,8 +277,9 @@ source is PNG with transparency).
 | `users/{uid}` | – | R · U (no role/status) · C | – | RW · D |
 | `users/{uid}/saved/*` | – | RW | – | RW |
 | `users/{uid}/notifications/*` | – | RW | – | RW |
-| `threads/{uid}` | – | R · C · U (active only) | – | RW · D |
-| `threads/{uid}/messages/*` | – | R · C (as self, active only) | – | RW · D |
+| `threads/{uid}` | — | R · C · U (own) | — | RW · D |
+| `threads/{uid}/messages/*` | — | R · C (as self) | — | RW · D |
+| `storySubmissions/{uid}/*` | — | R · C · U · D (own) | — | RW · D |
 
 R = read, C = create, U = update, D = delete.
 
@@ -268,35 +290,40 @@ R = read, C = create, U = update, D = delete.
 | Event | Writes |
 |---|---|
 | **Sign up** | Auth user → `users/{uid}` (role `user`, status `active`) |
+| **Immediately after sign-up** | Welcome notification: Beyond Now purpose + confidentiality agreement |
 | **First sign-in** | `users/{uid}.lastSeenAt`, `threads/{uid}` created, welcome notification |
 | **Admin sign-in** | `users/{uid}.role = "admin"`, `admins/{uid}` created if missing |
 | **Member sends message** | `threads/{uid}/messages/*` + thread `lastMessage`, `unreadByAdmin +1`, `status = open`; `users/{uid}.activity.messages +1` |
 | **Admin replies** | `threads/{uid}/messages/*` + thread `unreadByUser +1`; `users/{uid}/notifications/*` (kind `message`) |
+| **Member shares story** | Private `storySubmissions/{uid}/{id}` record (status `submitted`) |
+| **Admin reviews story** | Submission status/note update + private author notification; publish creates a member-only story in the CMS |
 | **Member opens Messages** | thread `unreadByUser = 0` |
 | **Admin opens thread** | thread `unreadByAdmin = 0` |
 | **Save resource** | `users/{uid}/saved/{ref}`; `activity.saved +1` |
 | **Remove saved** | delete + `activity.saved −1` |
 | **Admin edits website** | `site/main` (whole document, ~1 s debounce) |
+| **Admin activates member Library** | `site/main.published.library.enabled = true`; member Library changes from Coming soon to the prepared catalogue |
 | **Upload media** | Storage object + `media/{id}` |
 | **Suspend member** | `users/{uid}.status = "suspended"` → message rules deny |
 | **Promote member** | `users/{uid}.role = "admin"` + `admins/{uid}` |
 
 ---
 
-## 8. Indexes
+## 8. Realtime queries
 
-All queries use a single ordered field, which Firestore indexes automatically:
+The app uses `onValue` subscriptions at each private path, then sorts records
+client-side for the dashboard. No Realtime Database `.indexOn` entries are
+required at the current data volume.
 
-| Collection | Query |
+| RTDB path | Client sort |
 |---|---|
-| `users` | `orderBy createdAt desc` |
-| `threads` | `orderBy lastMessageAt desc` |
-| `threads/{uid}/messages` | `orderBy createdAt asc` |
-| `users/{uid}/saved` | `orderBy savedAt desc` |
-| `users/{uid}/notifications` | `orderBy createdAt desc` |
-| `articles` | `orderBy updatedAt desc` |
-
-The app sorts records client-side, so no Realtime Database `.indexOn` entries are required.
+| `users` | `createdAt` descending |
+| `threads` | `meta/lastMessageAt` descending |
+| `threads/{uid}/messages` | `createdAt` ascending |
+| `users/{uid}/saved` | `savedAt` descending |
+| `users/{uid}/notifications` | `createdAt` descending |
+| `articles` | `updatedAt` descending |
+| `storySubmissions/{uid}` | `submittedAt` descending |
 
 ---
 
@@ -304,7 +331,7 @@ The app sorts records client-side, so no Realtime Database `.indexOn` entries ar
 
 - Messages are private to the member and administrators; no other member can
   read them (enforced by path-based rules, not by client filtering).
-- Passwords are never stored in Firestore — Firebase Authentication handles
+- Passwords are never stored in Realtime Database — Firebase Authentication handles
   credentials; password resets go through Firebase's email flow.
 - To delete a member entirely: delete the Auth user, then `users/{uid}` (and
   its sub-collections), `threads/{uid}` (and messages), `admins/{uid}` if

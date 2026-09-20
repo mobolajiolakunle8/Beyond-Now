@@ -4,10 +4,12 @@ import {
   DashboardPage,
   MessagesPage,
   NotificationsPage,
+  PrivacyPage,
   ProfilePage,
   ProgressPage,
   ResourcesPage,
   SavedPage,
+  ShareStoryPage,
   SettingsPage,
 } from "@/account/Pages";
 import { AccountLayout, NAV, useDocumentTitle } from "@/account/ui";
@@ -23,12 +25,24 @@ const PAGES: Record<string, ComponentType> = {
   saved: SavedPage,
   progress: ProgressPage,
   notifications: NotificationsPage,
+  privacy: PrivacyPage,
+  "share-story": ShareStoryPage,
   settings: SettingsPage,
 };
 
 const go = (id: string) => {
   window.location.hash = `#/account/${id}`;
 };
+
+function consumeNextRoute(): string {
+  try {
+    const next = sessionStorage.getItem("bn.account.next");
+    sessionStorage.removeItem("bn.account.next");
+    return next === "messages" || next === "share-story" ? next : "dashboard";
+  } catch {
+    return "dashboard";
+  }
+}
 
 function Splash({ message }: { message: string }) {
   return (
@@ -75,7 +89,7 @@ export function AccountApp() {
   useEffect(() => {
     if (!authReady) return;
     if (!authedUser && !AUTH_ROUTES.has(route)) go("signin");
-    if (authedUser && (AUTH_ROUTES.has(route) || route === "")) go("dashboard");
+    if (authedUser && (AUTH_ROUTES.has(route) || route === "")) go(consumeNextRoute());
     if (authedUser && route === "logout") {
       void signOutUser().then(() => {
         window.location.hash = "#home";

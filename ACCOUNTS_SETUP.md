@@ -15,6 +15,7 @@ them work. Field-level detail lives in [`DATABASE.md`](./DATABASE.md).
 /#/account/dashboard          Overview
 /#/account/profile            Name, bio, profile picture
 /#/account/messages           Private chat with Beyond Now
+/#/account/share-story        Private story submission and review status
 /#/account/resources          Browse & save published guidance
 /#/account/saved              Bookmarks
 /#/account/progress           Milestones from real activity
@@ -32,7 +33,7 @@ them work. Field-level detail lives in [`DATABASE.md`](./DATABASE.md).
 ## Who is an administrator?
 
 A signed-in user is an administrator when **any** of these is true — and the
-Firestore/Storage rules check exactly the same three conditions server-side:
+Realtime Database/Storage rules check exactly the same three conditions server-side:
 
 1. Custom claim `isAdmin: true` on their ID token
 2. Their email is `beyondnow.ng@gmail.com`
@@ -81,6 +82,20 @@ Member sees the reply + a notification without refreshing
 
 ---
 
+## Member stories
+
+- The public Stories section is an account gate: story cards are only rendered
+  after a member signs in.
+- Members submit original stories in **My Account → Share your story**.
+  Submissions are private to their author and administrators.
+- The author chooses **anonymous** or **first-name** credit and must explicitly
+  consent to editorial review before submitting.
+- Admin → **Stories** includes a private submission queue. Admins can mark a
+  submission in review, decline it with a private note, or publish a reviewed
+  version to registered members. Every status change notifies the author.
+
+---
+
 ## What the rules guarantee
 
 | Guarantee | Enforced by |
@@ -90,7 +105,7 @@ Member sees the reply + a notification without refreshing
 | A member cannot promote themself | `users` update rule requires `role` and `status` unchanged |
 | A member cannot read another member's profile, saves or notifications | path-scoped rules under `users/{uid}` |
 | A non-admin cannot edit the website or media | `site/*`, `media/*` require `isAdmin()` |
-| Passwords never touch Firestore | Firebase Authentication |
+| Passwords never touch Realtime Database | Firebase Authentication |
 
 ---
 

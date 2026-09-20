@@ -1,0 +1,49 @@
+{
+  "name": "Beyond Now — Youth Advocacy, Guidance & Storytelling",
+  "short_name": "Beyond Now",
+  "description": "A trusted space for young people to understand, choose and move forward. Private messaging, stories and practical guidance.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f7f6f2",
+  "theme_color": "#0B2D5B",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["education", "health", "social"],
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "My messages",
+      "short_name": "Messages",
+      "description": "Continue your private conversation with Beyond Now",
+      "url": "/#/account/messages"
+    },
+    {
+      "name": "Resource Library",
+      "short_name": "Library",
+      "description": "Browse practical guidance packs",
+      "url": "/#/account/resources"
+    },
+    {
+      "name": "Share your story",
+      "short_name": "Share story",
+      "description": "Submit your story for review",
+      "url": "/#/account/share-story"
+    }
+  ]
+}

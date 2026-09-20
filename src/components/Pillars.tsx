@@ -1,13 +1,24 @@
 import { useState } from "react";
-import { WhatsAppIcon } from "@/components/Logo";
 import { Reveal, SectionHeading, Wrap } from "@/components/ui";
-import { useContent, useWa } from "@/lib/store";
+import { useUserStore } from "@/account/UserStore";
+import { useContent } from "@/lib/store";
 import { cn } from "@/utils/cn";
 
 export function Pillars() {
   const { pillars, pillarsSection } = useContent();
-  const wa = useWa();
+  const { authedUser } = useUserStore();
   const [open, setOpen] = useState<string | null>(null);
+
+  const startChat = (title: string) => {
+    const draft = `Hi Beyond Now, I'd like to talk about something related to ${title.replace("Beyond ", "").toLowerCase()}.`;
+    try {
+      sessionStorage.setItem("bn.chat.draft", draft);
+      sessionStorage.setItem("bn.account.next", "messages");
+    } catch {
+      /* storage unavailable — route still works */
+    }
+    window.location.hash = authedUser ? "#/account/messages" : "#/account/signin";
+  };
 
   if (pillars.length === 0) return null;
 
@@ -74,15 +85,14 @@ export function Pillars() {
                         ))}
                       </ul>
                     )}
-                    <a
-                      href={wa(`Hello Beyond Now. I'd like to talk about something related to ${pillar.title.replace("Beyond ", "").toLowerCase()}.`)}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <button
+                      type="button"
+                      onClick={() => startChat(pillar.title)}
                       className="mt-5 inline-flex items-center gap-2 rounded-full bg-teal px-4 py-2 font-display text-[0.82rem] font-semibold text-white transition-colors hover:bg-[#00c9a2]"
                     >
-                      <WhatsAppIcon className="h-4 w-4" />
-                      Talk about this
-                    </a>
+                      Talk about this in chat
+                      <span aria-hidden="true">→</span>
+                    </button>
                   </div>
                 </article>
               </Reveal>

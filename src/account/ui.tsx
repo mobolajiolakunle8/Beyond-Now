@@ -262,10 +262,12 @@ export const NAV: { id: string; label: string; icon: string }[] = [
   { id: "dashboard", label: "Dashboard", icon: "◎" },
   { id: "profile", label: "My Profile", icon: "◍" },
   { id: "messages", label: "Messages", icon: "✉" },
-  { id: "resources", label: "Resources", icon: "▤" },
+  { id: "share-story", label: "Share your story", icon: "✎" },
+  { id: "resources", label: "Library", icon: "▤" },
   { id: "saved", label: "Saved", icon: "✦" },
   { id: "progress", label: "Progress", icon: "↗" },
   { id: "notifications", label: "Notifications", icon: "♦" },
+  { id: "privacy", label: "Privacy & Data", icon: "⛨" },
   { id: "settings", label: "Settings", icon: "⚙" },
   { id: "logout", label: "Logout", icon: "⏻" },
 ];
@@ -401,4 +403,28 @@ export function useDocumentTitle(title: string) {
       document.title = prev;
     };
   }, [title]);
+}
+
+/**
+ * Accessible, toast-free confirmation banner. Uses role="status" so screen
+ * readers announce the result without stealing focus.
+ */
+export function Banner({
+  tone = "info",
+  children,
+}: {
+  tone?: "info" | "success" | "warning" | "error";
+  children: ReactNode;
+}) {
+  const tones = {
+    info: "border-navy/15 bg-bone text-navy",
+    success: "border-teal/30 bg-teal/10 text-teal-ink",
+    warning: "border-sun/40 bg-sun/10 text-[#8a6500]",
+    error: "border-red-200 bg-red-50 text-red-700",
+  } as const;
+  return (
+    <div role={tone === "warning" ? "alert" : "status"} className={cn("rounded-xl border px-4 py-3 text-[0.86rem] leading-relaxed", tones[tone])}>
+      {children}
+    </div>
+  );
 }

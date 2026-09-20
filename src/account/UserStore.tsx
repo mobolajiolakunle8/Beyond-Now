@@ -2,12 +2,11 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { ensureThread, subscribeMessages, subscribeThread, type Message, type Thread } from "@/lib/chat";
 import { listenLoop } from "@/lib/listen";
-import { databaseErrorMessage, getFirebase } from "@/lib/firebase";
+import { databaseErrorMessage, getFirebase, memberFacingMessage } from "@/lib/firebase";
 import {
   buildProfile,
   ensureUserRecords,
   resolveIsAdmin,
-  sendWelcome,
   signOutCurrent,
   subscribeNotifications,
   subscribeProfile,
@@ -49,7 +48,6 @@ export function UserStoreProvider({ children }: { children: ReactNode }) {
   const [thread, setThread] = useState<Thread | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [syncError, setSyncError] = useState<string | null>(null);
-  const welcomed = useRef<Set<string>>(new Set());
   const [epoch, setEpoch] = useState(0);
   const lastSyncError = useRef<string>("");
 
@@ -150,9 +148,10 @@ export function UserStoreProvider({ children }: { children: ReactNode }) {
       return;
     }
     const uid = authedUser.uid;
+    const friendlySyncError = () => setSyncErrorOnce(memberFacingMessage());
     const unsubSaved = listenLoop(
       (confirm, fatal) => subscribeSaved(uid, (items) => { confirm(); setSaved(items); }, fatal),
-      { onError: setSyncErrorOnce, onRecover: () => setSyncErrorOnce(null) },
+      { onError: friendlySyncError, onRecover: () => setSyncErrorOnce(null) },
     );
     const unsubNotif = listenLoop(
       (confirm, fatal) =>
@@ -161,14 +160,10 @@ export function UserStoreProvider({ children }: { children: ReactNode }) {
           (items) => {
             confirm();
             setNotifications(items);
-            if (items.length === 0 && !welcomed.current.has(uid)) {
-              welcomed.current.add(uid);
-              void sendWelcome(uid, authedUser.displayName ?? "").catch(() => undefined);
-            }
           },
           fatal,
         ),
-      { onError: setSyncErrorOnce, onRecover: () => setSyncErrorOnce(null) },
+      { onError: friendlySyncError, onRecover: () => setSyncErrorOnce(null) },
     );
     return () => {
       unsubSaved();

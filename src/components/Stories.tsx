@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { useUserStore } from "@/account/UserStore";
 import { Reveal, SectionHeading, Wrap } from "@/components/ui";
-import { useContent, useWa } from "@/lib/store";
+import { useContent } from "@/lib/store";
 import { cn } from "@/utils/cn";
 
 const ACCENT: Record<string, string> = {
@@ -11,11 +12,10 @@ const ACCENT: Record<string, string> = {
 
 export function Stories() {
   const { stories, storiesSection } = useContent();
-  const wa = useWa();
+  const { authedUser } = useUserStore();
   const [open, setOpen] = useState<string | null>(null);
 
   const published = stories.filter((s) => s.status === "published").slice(0, 3);
-  if (published.length === 0) return null;
 
   return (
     <section id="stories" className="bg-bone py-16 sm:py-20">
@@ -32,16 +32,45 @@ export function Stories() {
             }
             lead={storiesSection.lead}
           />
-          <a
-            href={wa("Hello Beyond Now. I'd like to share my story (anonymously if possible).")}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="shrink-0 font-display text-[0.88rem] font-bold text-navy underline-offset-4 hover:underline"
-          >
-            {storiesSection.shareLabel} →
-          </a>
+          {authedUser && (
+            <a
+              href="#/account/share-story"
+              className="shrink-0 font-display text-[0.88rem] font-bold text-navy underline-offset-4 hover:underline"
+            >
+              {storiesSection.shareLabel} →
+            </a>
+          )}
         </div>
 
+        {!authedUser ? (
+          <Reveal delay={100}>
+            <div className="mt-10 grid gap-6 rounded-[1.5rem] border border-navy/10 bg-white p-6 shadow-card sm:grid-cols-[1fr_auto] sm:items-center sm:p-8">
+              <div>
+                <p className="font-display text-xl font-extrabold text-navy">Stories are for registered members.</p>
+                <p className="mt-2 max-w-xl text-[0.95rem] leading-relaxed text-charcoal/65">
+                  Create a free account to read real-life-inspired stories, save the ones that help, and share your own safely.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-3 sm:justify-end">
+                <a href="#/account/signup" className="rounded-full bg-navy px-5 py-3 font-display text-[0.85rem] font-semibold text-white transition-colors hover:bg-navy-soft">
+                  Create free account
+                </a>
+                <a href="#/account/signin" className="rounded-full border border-navy/15 px-5 py-3 font-display text-[0.85rem] font-semibold text-navy hover:border-navy/35">
+                  Sign in
+                </a>
+              </div>
+            </div>
+          </Reveal>
+        ) : published.length === 0 ? (
+          <Reveal delay={100}>
+            <div className="mt-10 rounded-[1.5rem] border border-dashed border-navy/20 bg-white p-8 text-center">
+              <p className="font-display text-lg font-bold text-navy">New stories are coming soon.</p>
+              <a href="#/account/share-story" className="mt-3 inline-block font-display text-sm font-semibold text-teal-ink hover:underline">
+                Be the first to share yours →
+              </a>
+            </div>
+          </Reveal>
+        ) : (
         <ul className="mt-10 grid gap-5 md:grid-cols-3">
           {published.map((story, i) => {
             const expanded = open === story.id;
@@ -92,6 +121,7 @@ export function Stories() {
             );
           })}
         </ul>
+        )}
       </Wrap>
     </section>
   );

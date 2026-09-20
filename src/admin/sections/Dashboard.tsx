@@ -33,7 +33,7 @@ export function Overview({ go }: { go: (route: string) => void }) {
   const publishedPacks = content.resources.filter((r) => r.status === "published").length;
   const mediaBytes = media.reduce((sum, m) => sum + m.size, 0);
 
-  // A permission-denied means the Firestore ruleset is still deny-all (not published).
+  // A permission-denied means the Realtime Database ruleset is still deny-all (not published).
   const rulesLocked = /security rules|permission|insufficient/i.test(syncError ?? "");
 
   const sections = [

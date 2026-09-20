@@ -9,6 +9,11 @@ export type MediaItem = {
   width: number;
   height: number;
   size: number;
+  /** Bytes before the browser resized/re-encoded the asset. */
+  originalSize?: number;
+  /** Original pixel dimensions before resize. */
+  originalWidth?: number;
+  originalHeight?: number;
   type: string;
   uploadedAt: string;
 };
@@ -65,6 +70,15 @@ export type ResourceTrackContent = {
   items: ResourceItem[];
 };
 
+export type MemberLibrary = {
+  /** Controls whether members can browse resource packs in My Account. */
+  enabled: boolean;
+  title: string;
+  description: string;
+  comingSoonTitle: string;
+  comingSoonBody: string;
+};
+
 export type SiteContent = {
   brand: {
     logoUrl: string;
@@ -104,6 +118,7 @@ export type SiteContent = {
   method: MethodContent[];
   storiesSection: { eyebrow: string; headingLead: string; headingAccent: string; lead: string; shareLabel: string };
   stories: StoryContent[];
+  library: MemberLibrary;
   resources: ResourceTrackContent[];
   finalCta: {
     eyebrow: string;
@@ -201,6 +216,13 @@ export const DEFAULT_CONTENT: SiteContent = {
     status: "published" as Status,
     updatedAt: SEED_DATE,
   })),
+  library: {
+    enabled: false,
+    title: "The Beyond Now Library",
+    description: "Practical guidance packs you can save, return to, and use in your own time.",
+    comingSoonTitle: "The Library is coming soon.",
+    comingSoonBody: "Our practical guidance packs are being prepared with care. Check back soon — your saved resources and library access will appear here.",
+  },
   resources: RESOURCE_TRACKS.map((t) => ({
     id: t.id,
     label: t.label,

@@ -20,7 +20,7 @@ import {
 } from "firebase/auth";
 import { DEFAULT_CONTENT, cloneContent, mergeContent, type MediaItem, type SiteContent } from "@/lib/content";
 import { ADMIN_EMAIL, ADMIN_NAME, authErrorMessage, databaseErrorMessage, getFirebase, isFirebaseConfigured } from "@/lib/firebase";
-import { processImageFile } from "@/lib/media";
+import { processImageFile, type ImageProcessOptions, type UploadHooks } from "@/lib/media";
 import {
   deleteMediaFromCloud,
   pullMediaLibrary,
@@ -107,9 +107,9 @@ type StoreValue = {
   retryCloud: () => void;
   verifyCloud: () => Promise<CloudCheck[]>;
   resetContent: () => Promise<void>;
-  uploadMedia: (files: FileList | File[]) => Promise<MediaItem[]>;
+  uploadMedia: (files: FileList | File[], options?: ImageProcessOptions, hooks?: UploadHooks) => Promise<MediaItem[]>;
   deleteMedia: (id: string) => Promise<void>;
-  replaceMedia: (id: string, file: File) => Promise<void>;
+  replaceMedia: (id: string, file: File, options?: ImageProcessOptions, hooks?: UploadHooks) => Promise<void>;
   renameMedia: (id: string, name: string) => Promise<void>;
   login: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   logout: () => Promise<void>;
@@ -475,7 +475,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   /**
    * Probes every layer of the Firebase stack and reports exactly which setup
-   * step is broken, so an administrator can fix a deny-by-default Firestore
+   * step is broken, so an administrator can fix a deny-by-default Realtime Database
    * database without guessing. When the write probe succeeds it also repairs
    * the administrator's own `admins/{uid}` allow-list record.
    */
@@ -543,14 +543,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const cloudMedia = cloudEnabled && isAdmin;
 
   const uploadMedia = useCallback(
-    async (files: FileList | File[]) => {
+    async (files: FileList | File[], options?: ImageProcessOptions, hooks: UploadHooks = {}) => {
       const list = Array.from(files);
       if (!list.length) return [];
       const added: MediaItem[] = [];
-      for (const file of list) {
+      let failures = 0;
+      for (let i = 0; i < list.length; i++) {
+        const file = list[i];
         try {
-          added.push(cloudMedia ? await uploadMediaToCloud(file) : await processImageFile(file));
+          const item = cloudMedia
+            ? await uploadMediaToCloud(file, options, {
+                ...hooks,
+                onProgress: hooks.onProgress
+                  ? (p) => hooks.onProgress?.({ ...p, percent: list.length > 1 ? Math.round(((i + p.percent / 100) / list.length) * 100) : p.percent })
+                  : undefined,
+              })
+            : await processImageFile(file, options);
+          added.push(item);
         } catch (err) {
+          failures += 1;
+          // Cancellation is intentional — stop quietly without an error toast.
+          if (err instanceof Error && /cancelled/i.test(err.message)) return added;
           notify("error", databaseErrorMessage(err));
         }
       }
@@ -564,7 +577,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         setMedia(next);
       }
-      notify("success", `${added.length} image${added.length === 1 ? "" : "s"} uploaded.`);
+      if (failures > 0) {
+        notify("info", `${added.length} of ${list.length} images uploaded. ${failures} failed — try those again.`);
+      } else {
+        notify("success", `${added.length} image${added.length === 1 ? "" : "s"} uploaded.`);
+      }
       return added;
     },
     [cloudMedia, media, notify],
@@ -590,17 +607,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   );
 
   const replaceMedia = useCallback(
-    async (id: string, file: File) => {
+    async (id: string, file: File, options?: ImageProcessOptions, hooks: UploadHooks = {}) => {
       try {
-        if (cloudMedia) await replaceMediaInCloud(id, file);
+        if (cloudMedia) await replaceMediaInCloud(id, file, options, hooks);
         else {
-          const fresh = await processImageFile(file);
+          const fresh = await processImageFile(file, options);
           const next = media.map((m) => (m.id === id ? { ...fresh, id } : m));
           writeLocal(K.media, next);
           setMedia(next);
         }
         notify("success", "Image replaced everywhere it was used.");
       } catch (err) {
+        if (err instanceof Error && /cancelled/i.test(err.message)) {
+          notify("info", "Replacement cancelled. The existing image was kept.");
+          return;
+        }
         notify("error", databaseErrorMessage(err));
       }
     },

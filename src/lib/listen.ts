@@ -1,9 +1,9 @@
 import type { Unsubscribe } from "firebase/database";
 
 /**
- * Re-attaches a Firestore listener after a fatal error with exponential backoff.
+ * Re-attaches a Realtime Database listener after a fatal error with exponential backoff.
  *
- * Realtime subscriptions are permanently terminated when security rules are
+ * Firebase realtime subscriptions are permanently terminated when security rules are
  * redeployed, denied, or the network drops. Rather than leaving the UI
  * dead until a page refresh, this re-opens the listener every few seconds —
  * so the moment rules deploy or connectivity returns, the app syncs on its own.

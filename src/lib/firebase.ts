@@ -151,3 +151,25 @@ export function databaseErrorMessage(err: unknown): string {
   }
   return raw;
 }
+
+/**
+ * True for transport/permission failures (network down, listener rejected,
+ * rules not yet published) — the cases where retrying later can succeed.
+ * Validation and auth errors return false so they always surface immediately.
+ */
+export function isSyncFailure(err: unknown): boolean {
+  const code =
+    err && typeof err === "object" && "code" in err ? String((err as { code: string }).code) : "";
+  const raw = err instanceof Error ? err.message : "";
+  return /permission-denied|PERMISSION_DENIED|permission|insufficient|unavailable|network|timeout|timed out|offline|disconnected|aborted/i.test(
+    `${code} ${raw}`,
+  );
+}
+
+/**
+ * Member-facing copy for sync failures. Members cannot act on rules or
+ * deployment guidance, so those details stay in admin-only surfaces.
+ */
+export function memberFacingMessage(): string {
+  return "We couldn't reach our servers right now. Your work is safe — please try again in a moment.";
+}

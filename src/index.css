@@ -143,3 +143,73 @@
   background-image: radial-gradient(rgba(255, 255, 255, 0.14) 1px, transparent 1px);
   background-size: 22px 22px;
 }
+
+/* ==========================================================================
+ * Accessibility and low-bandwidth display preferences.
+ * These are driven by data attributes set from src/lib/preferences.ts so the
+ * site respects each user's device and stated needs.
+ * ========================================================================== */
+
+/* Larger base text scale (member preference) */
+html[data-larger-text="true"] {
+  font-size: 112.5%;
+}
+
+/* Higher-contrast surfaces and stronger separation (member preference) */
+html[data-high-contrast="true"] {
+  --color-mist: #cbd2d9;
+}
+
+html[data-high-contrast="true"] body {
+  background-color: #ffffff;
+}
+
+html[data-high-contrast="true"] .reveal {
+  opacity: 1;
+  transform: none;
+  filter: none;
+}
+
+html[data-high-contrast="true"] .shadow-card,
+html[data-high-contrast="true"] .shadow-lift {
+  box-shadow: none !important;
+}
+
+/* Text-first low-data layout (member preference or Save-Data) */
+html[data-low-data="true"] .animate-float-slow,
+html[data-low-data="true"] .animate-sunrise {
+  animation: none !important;
+}
+
+html[data-low-data="true"] .dot-grid {
+  background-image: none;
+}
+
+html[data-low-data="true"] img {
+  filter: none;
+}
+
+/* Decorative background gradients are skipped on low-data connections */
+html[data-low-data="true"] [aria-hidden="true"].absolute {
+  backdrop-filter: none !important;
+}
+
+/* Respect the OS reduced-motion setting as well as the explicit preference */
+@media (prefers-reduced-motion: reduce) {
+  html[data-low-data="true"] * {
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* Visible skip links and focus rings remain readable at high zoom */
+:focus-visible {
+  outline-width: 3px;
+}
+
+/* Ensure text remains legible when the browser enforces forced colors */
+@media (forced-colors: active) {
+  .reveal {
+    opacity: 1;
+    transform: none;
+  }
+}

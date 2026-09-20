@@ -3,8 +3,9 @@ import { Login } from "@/admin/Login";
 import { ResourcesAdmin, StoriesAdmin } from "@/admin/sections/Collections";
 import { ContentEditor } from "@/admin/sections/ContentEditor";
 import { Overview, PreviewPage } from "@/admin/sections/Dashboard";
-import { AccountPage, MediaLibraryPage, SettingsPage } from "@/admin/sections/Library";
-import { ArticlesAdmin, MessagesAdmin, UsersAdmin } from "@/admin/sections/UserManagement";
+import { AccountPage, MediaLibraryPage, MemberLibraryAdmin, SettingsPage } from "@/admin/sections/Library";
+import { ArticlesAdmin, MessagesAdmin, SafeguardingAdmin, UsersAdmin } from "@/admin/sections/UserManagement";
+import { SecurityAdmin } from "@/admin/sections/SecurityAdmin";
 import { AdminBtn, ToastStack } from "@/admin/ui";
 import { LogoMark } from "@/components/Logo";
 import { relativeTime } from "@/lib/media";
@@ -16,11 +17,14 @@ const NAV = [
   { id: "content", label: "Website Content", icon: "✎" },
   { id: "stories", label: "Stories", icon: "❝" },
   { id: "resources", label: "Resources", icon: "▤" },
+  { id: "library", label: "Member Library", icon: "▥" },
   { id: "articles", label: "Articles", icon: "≡" },
   { id: "media", label: "Media Library", icon: "▣" },
   { id: "users", label: "Users", icon: "◍" },
   { id: "messages", label: "Messages", icon: "✉" },
+  { id: "safeguarding", label: "Safeguarding", icon: "⛨" },
   { id: "settings", label: "Site Settings", icon: "⚙" },
+  { id: "security", label: "Security", icon: "⛨" },
   { id: "preview", label: "Preview", icon: "▷" },
   { id: "account", label: "Admin Account", icon: "▙" },
 ] as const;
@@ -202,11 +206,14 @@ export function AdminApp({ route }: { route: string }) {
           {current === "content" && <ContentEditor toolbar={statusBadge} />}
           {current === "stories" && <StoriesAdmin toolbar={statusBadge} />}
           {current === "resources" && <ResourcesAdmin toolbar={statusBadge} />}
+          {current === "library" && <MemberLibraryAdmin toolbar={statusBadge} />}
           {current === "articles" && <ArticlesAdmin />}
           {current === "media" && <MediaLibraryPage />}
           {current === "users" && <UsersAdmin />}
           {current === "messages" && <MessagesAdmin />}
+          {current === "safeguarding" && <SafeguardingAdmin />}
           {current === "settings" && <SettingsPage toolbar={statusBadge} />}
+          {current === "security" && <SecurityAdmin toolbar={statusBadge} />}
           {current === "preview" && <PreviewPage toolbar={statusBadge} />}
           {current === "account" && <AccountPage />}
         </main>

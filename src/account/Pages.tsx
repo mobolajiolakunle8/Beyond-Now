@@ -1,10 +1,25 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AcctBtn, AcctField, AcctInput, AcctTextArea, Empty, PageTitle } from "@/account/ui";
 import { useUserStore } from "@/account/UserStore";
 import { markThreadRead, sendUserMessage } from "@/lib/chat";
-import { databaseErrorMessage } from "@/lib/firebase";
+import { raiseSafeguardingCase } from "@/lib/audit";
+import { URGENT_SUPPORT_COPY, assessRisk } from "@/lib/safeguarding";
+import { databaseErrorMessage, isSyncFailure, memberFacingMessage } from "@/lib/firebase";
 import { formatDate, formatDateTime, relativeTime } from "@/lib/media";
 import { useStore, useWa } from "@/lib/store";
+import { useDisplayPreferences } from "@/lib/preferences";
+import { onInstallPromptChange } from "@/lib/pwa";
+import {
+  flushStoryOutbox,
+  queueStoryOffline,
+  readStoryOutbox,
+  removeQueuedStory,
+  submitStory,
+  subscribeMyStorySubmissions,
+  type QueuedSubmission,
+  type StoryIdentity,
+  type StorySubmission,
+} from "@/lib/storySubmissions";
 import {
   changeOwnPassword,
   deleteNotification,
@@ -33,13 +48,17 @@ function Stat({ label, value, sub, tone = "navy" }: { label: string; value: stri
   );
 }
 
-function Notice({ tone, children }: { tone: "success" | "error"; children: string }) {
+function Notice({ tone, children }: { tone: "success" | "error" | "info"; children: string }) {
   return (
     <p
       role={tone === "error" ? "alert" : "status"}
       className={cn(
         "rounded-lg border px-3.5 py-2.5 text-[0.84rem] font-medium",
-        tone === "success" ? "border-teal/30 bg-teal/10 text-teal-ink" : "border-red-200 bg-red-50 text-red-700",
+        tone === "success"
+          ? "border-teal/30 bg-teal/10 text-teal-ink"
+          : tone === "info"
+            ? "border-sun/30 bg-sun/10 text-navy-deep"
+            : "border-red-200 bg-red-50 text-red-700",
       )}
     >
       {children}
@@ -141,15 +160,17 @@ export function ProfilePage() {
   const [name, setName] = useState(profile?.name ?? "");
   const [bio, setBio] = useState(profile?.bio ?? "");
   const [busy, setBusy] = useState(false);
+  const [avatarProgress, setAvatarProgress] = useState<number | null>(null);
   const [notice, setNotice] = useState<{ tone: "success" | "error"; msg: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const avatarAbort = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (profile) {
       setName(profile.name);
       setBio(profile.bio);
     }
-  }, [profile?.uid]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [profile?.uid]);
 
   const run = async (task: () => Promise<void>, success: string) => {
     if (!authedUser) return;
@@ -159,6 +180,8 @@ export function ProfilePage() {
       await task();
       setNotice({ tone: "success", msg: success });
     } catch (err) {
+      // Cancellation is intentional — stay quiet instead of flashing an error.
+      if (err instanceof Error && /cancelled/i.test(err.message)) return;
       setNotice({ tone: "error", msg: databaseErrorMessage(err) });
     } finally {
       setBusy(false);
@@ -180,7 +203,9 @@ export function ProfilePage() {
       <div className="grid gap-5 lg:grid-cols-[1fr_2fr]">
         <section className="rounded-2xl border border-mist bg-white p-5">
           <h2 className="font-display text-[1rem] font-bold text-navy">Profile picture</h2>
-          <p className="mt-1 text-[0.82rem] text-charcoal/55">JPG, PNG or WebP · 5 MB max.</p>
+          <p className="mt-1 text-[0.82rem] text-charcoal/55">
+            Recommended 512 × 512 px square · JPG, PNG or WebP · 5 MB max · auto-resized and compressed.
+          </p>
           <div className="mt-4 flex items-center gap-4">
             {profile?.avatarUrl ? (
               <img src={profile.avatarUrl} alt="Your profile picture" className="h-24 w-24 rounded-full object-cover ring-2 ring-mist" />
@@ -198,10 +223,35 @@ export function ProfilePage() {
                 onChange={(e) => {
                   const file = e.target.files?.[0];
                   e.target.value = "";
-                  if (file) void run(() => uploadAvatar(authedUser!.uid, file).then(() => undefined), "Profile picture updated.");
+                  if (!file || !authedUser || busy) return;
+                  const controller = new AbortController();
+                  avatarAbort.current = controller;
+                  setAvatarProgress(10);
+                  void run(
+                    () => uploadAvatar(authedUser.uid, file, {
+                      signal: controller.signal,
+                      onProgress: (p) => setAvatarProgress(p.percent),
+                    }).then(() => undefined),
+                    "Profile picture updated.",
+                  ).finally(() => {
+                    avatarAbort.current = null;
+                    setAvatarProgress(null);
+                  });
                 }}
               />
-              <AcctBtn variant="outline" size="sm" disabled={busy} onClick={() => fileRef.current?.click()}>Upload picture</AcctBtn>
+              <AcctBtn variant="outline" size="sm" disabled={busy} onClick={() => fileRef.current?.click()}>
+                {avatarProgress !== null ? `Uploading… ${avatarProgress}%` : "Upload picture"}
+              </AcctBtn>
+              {avatarProgress !== null && (
+                <div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-mist" role="progressbar" aria-valuenow={avatarProgress} aria-valuemin={0} aria-valuemax={100} aria-label="Uploading profile picture">
+                    <div className="h-full rounded-full bg-teal transition-all duration-200" style={{ width: `${avatarProgress}%` }} />
+                  </div>
+                  <button type="button" onClick={() => avatarAbort.current?.abort()} className="mt-1 font-display text-[0.72rem] font-semibold text-red-600 hover:underline">
+                    Cancel upload
+                  </button>
+                </div>
+              )}
               {profile?.avatarUrl && (
                 <AcctBtn variant="ghost" size="sm" className="text-red-600" disabled={busy} onClick={() => void run(() => removeAvatar(authedUser!.uid), "Profile picture removed.")}>
                   Remove picture
@@ -238,8 +288,23 @@ export function MessagesPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dismissError, setDismissError] = useState(false);
+  const [riskNotice, setRiskNotice] = useState<null | { level: "elevated" | "urgent" }>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // A public pillar can hand a contextual prompt into the private chat.
+  useEffect(() => {
+    try {
+      const draft = sessionStorage.getItem("bn.chat.draft");
+      if (draft) {
+        setText(draft);
+        sessionStorage.removeItem("bn.chat.draft");
+        window.setTimeout(() => textareaRef.current?.focus(), 0);
+      }
+    } catch {
+      /* storage unavailable — regular chat still works */
+    }
+  }, []);
 
   // Opening the page clears the unread badge.
   useEffect(() => {
@@ -267,7 +332,28 @@ export function MessagesPage() {
         email: profile?.email || authedUser.email || "",
         avatarUrl: profile?.avatarUrl || "",
       };
-      await sendUserMessage(sender, trimmed);
+
+      // Safeguarding screening runs before delivery so a trained lead is
+      // alerted immediately and the member sees crisis information right away.
+      const assessment = assessRisk(trimmed);
+      const messageId = await sendUserMessage(sender, trimmed);
+
+      if (assessment.level === "elevated" || assessment.level === "urgent") {
+        void raiseSafeguardingCase({
+          threadId: authedUser.uid,
+          userId: authedUser.uid,
+          userName: sender.name,
+          userEmail: sender.email,
+          messageId,
+          text: trimmed,
+          assessment,
+        });
+        if (assessment.level === "urgent") {
+          setRiskNotice({ level: "urgent" });
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        }
+      }
+
       setText("");
     } catch (err) {
       setError(databaseErrorMessage(err));
@@ -287,6 +373,50 @@ export function MessagesPage() {
           </a>
         }
       />
+
+      {syncError && !dismissError && (
+        <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-sun/30 bg-sun/10 px-4 py-2.5">
+          <span className="text-[0.8rem] text-charcoal/70">{syncError}</span>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={retrySync} className="font-display text-[0.75rem] font-semibold text-navy hover:underline">
+              Retry
+            </button>
+            <button type="button" onClick={() => setDismissError(true)} className="text-xs text-charcoal/45 hover:text-charcoal px-1">
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
+      {riskNotice && (
+        <section
+          role="alert"
+          aria-live="assertive"
+          className="mb-5 rounded-2xl border-2 border-red-300 bg-red-50 p-5 sm:p-6"
+        >
+          <p className="eyebrow text-red-700">Immediate support</p>
+          <h2 className="mt-2 font-display text-xl font-extrabold text-red-800">{URGENT_SUPPORT_COPY.title}</h2>
+          <p className="mt-2 text-[0.92rem] leading-relaxed text-red-900/85">{URGENT_SUPPORT_COPY.body}</p>
+          <ul className="mt-4 space-y-1.5 text-[0.88rem] font-medium text-red-900">
+            {URGENT_SUPPORT_COPY.lines.map((line) => (
+              <li key={line} className="flex gap-2">
+                <span aria-hidden="true">•</span>
+                {line}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-4 border-t border-red-200 pt-3 text-[0.8rem] leading-relaxed text-red-900/80">
+            {URGENT_SUPPORT_COPY.footer}
+          </p>
+          <button
+            type="button"
+            onClick={() => setRiskNotice(null)}
+            className="mt-4 font-display text-[0.78rem] font-semibold text-red-800 hover:underline"
+          >
+            I have seen this — continue
+          </button>
+        </section>
+      )}
 
       <div className="overflow-hidden rounded-2xl border border-mist bg-white shadow-[0_1px_2px_rgba(11,45,91,0.05)]">
         <div className="flex items-center justify-between gap-3 border-b border-mist bg-bone/60 px-4 py-3">
@@ -352,24 +482,17 @@ export function MessagesPage() {
               {busy ? "Sending…" : "Send"}
             </AcctBtn>
           </div>
-          {(error || (syncError && !dismissError)) && (
+          {error && (
             <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
-              <span className="text-[0.8rem] text-red-700">{error ?? syncError ?? ""}</span>
-              <div className="flex items-center gap-2">
-                {syncError && !error && (
-                  <button type="button" onClick={retrySync} className="shrink-0 font-display text-[0.78rem] font-semibold text-navy hover:underline">
-                    Retry
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setDismissError(true)}
-                  aria-label="Dismiss error"
-                  className="text-xs text-charcoal/45 hover:text-charcoal"
-                >
-                  ✕
-                </button>
-              </div>
+              <span className="text-[0.8rem] text-red-700">{error}</span>
+              <button
+                type="button"
+                onClick={() => setError(null)}
+                aria-label="Dismiss error"
+                className="text-xs text-charcoal/45 hover:text-charcoal px-1"
+              >
+                ✕
+              </button>
             </div>
           )}
           <p className="mt-2 text-[0.7rem] text-charcoal/45">
@@ -390,6 +513,7 @@ export function ResourcesPage() {
   const [busyRef, setBusyRef] = useState<string | null>(null);
   const savedByRef = useMemo(() => new Map(saved.map((s) => [s.ref, s.id])), [saved]);
 
+  const library = content.library;
   const items = useMemo(() => {
     const all = content.resources
       .filter((t) => t.status === "published")
@@ -416,7 +540,26 @@ export function ResourcesPage() {
 
   return (
     <div>
-      <PageTitle title="Resources" description="Every practical guidance pack published by Beyond Now. Save the ones you want to come back to." />
+      <PageTitle title={library.title} description={library.description} />
+      {!library.enabled ? (
+        <section className="relative overflow-hidden rounded-[1.5rem] border border-navy/10 bg-white p-7 shadow-card sm:p-10">
+          <div aria-hidden="true" className="absolute -top-16 -right-12 h-48 w-48 rounded-full bg-sun/20 blur-3xl" />
+          <div className="relative max-w-xl">
+            <span className="eyebrow text-teal-ink">Member library</span>
+            <h2 className="mt-3 font-display text-2xl font-extrabold text-navy sm:text-3xl">{library.comingSoonTitle}</h2>
+            <p className="mt-3 text-[0.96rem] leading-relaxed text-charcoal/70">{library.comingSoonBody}</p>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <a href="#/account/messages" className="rounded-full bg-navy px-5 py-3 font-display text-[0.85rem] font-semibold text-white hover:bg-navy-soft">
+                Talk to Beyond Now
+              </a>
+              <a href="#/account/share-story" className="rounded-full border border-navy/15 px-5 py-3 font-display text-[0.85rem] font-semibold text-navy hover:border-navy/35">
+                Share your story
+              </a>
+            </div>
+          </div>
+        </section>
+      ) : (
+        <>
       <input
         type="search"
         value={query}
@@ -444,6 +587,8 @@ export function ResourcesPage() {
             );
           })}
         </ul>
+      )}
+        </>
       )}
     </div>
   );
@@ -474,6 +619,295 @@ export function SavedPage() {
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+/* ------------------------------- Share Story ------------------------------- */
+
+export function ShareStoryPage() {
+  const { authedUser, profile } = useUserStore();
+  const [title, setTitle] = useState("");
+  const [category, setCategory] = useState("My story");
+  const [story, setStory] = useState("");
+  const [identity, setIdentity] = useState<StoryIdentity>("anonymous");
+  const [consent, setConsent] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [flushing, setFlushing] = useState(false);
+  const [notice, setNotice] = useState<{ tone: "success" | "error" | "info"; msg: string } | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [submissions, setSubmissions] = useState<StorySubmission[]>([]);
+  const [queued, setQueued] = useState<QueuedSubmission[]>([]);
+
+  const refreshQueue = useCallback(() => {
+    if (!authedUser) return;
+    setQueued(readStoryOutbox(authedUser.uid));
+  }, [authedUser]);
+
+  const flushQueue = useCallback(
+    async (silent = false) => {
+      if (!authedUser || flushing) return;
+      setFlushing(true);
+      try {
+        const result = await flushStoryOutbox(authedUser.uid);
+        refreshQueue();
+        if (result.sent > 0) {
+          setNotice({
+            tone: "success",
+            msg:
+              result.failed > 0
+                ? `Sent ${result.sent} saved ${result.sent === 1 ? "story" : "stories"}. ${result.failed} still waiting — we'll keep trying.`
+                : "Your saved story has been sent privately to the Beyond Now team for review.",
+          });
+        } else if (!silent && result.failed > 0) {
+          setNotice({ tone: "info", msg: memberFacingMessage() });
+        }
+      } finally {
+        setFlushing(false);
+      }
+    },
+    [authedUser, flushing, refreshQueue],
+  );
+
+  useEffect(() => {
+    if (!authedUser) return;
+    refreshQueue();
+    const unsub = subscribeMyStorySubmissions(authedUser.uid, setSubmissions, () =>
+      setListError(memberFacingMessage()),
+    );
+    const onOnline = () => void flushQueue(true);
+    window.addEventListener("online", onOnline);
+    void flushQueue(true);
+    return () => {
+      unsub();
+      window.removeEventListener("online", onOnline);
+    };
+  }, [authedUser, flushQueue, refreshQueue]);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!authedUser || busy) return;
+    setBusy(true);
+    setNotice(null);
+    const input = {
+      userId: authedUser.uid,
+      authorName: profile?.name || authedUser.displayName || authedUser.email?.split("@")[0] || "Member",
+      category: category.trim() || "My story",
+      title: title.trim(),
+      story: story.trim(),
+      identity,
+      consentToPublish: consent,
+    };
+    try {
+      await submitStory(input);
+      setTitle("");
+      setStory("");
+      setConsent(false);
+      setNotice({ tone: "success", msg: "Thank you. Your story has been sent privately to the Beyond Now team for review." });
+    } catch (err) {
+      if (isSyncFailure(err)) {
+        // Keep the member's work safe on this device and retry automatically.
+        queueStoryOffline(input);
+        refreshQueue();
+        setTitle("");
+        setStory("");
+        setConsent(false);
+        setNotice({
+          tone: "info",
+          msg: "We couldn't reach our servers, so your story is saved on this device. It will be sent automatically — you can also press Retry now.",
+        });
+      } else {
+        setNotice({ tone: "error", msg: err instanceof Error ? err.message : "Your story could not be sent. Please check it and try again." });
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const label: Record<StorySubmission["status"], string> = {
+    submitted: "Submitted",
+    reviewing: "In review",
+    published: "Shared",
+    declined: "Update available",
+  };
+
+  return (
+    <div>
+      <PageTitle
+        title="Share your story"
+        description="Your story is submitted privately to the Beyond Now team. We never publish it without reviewing it and respecting the name option you choose."
+      />
+
+      <div className="grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
+        <form onSubmit={submit} className="rounded-2xl border border-mist bg-white p-5 sm:p-6">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <AcctField label="Story title">
+              <AcctInput value={title} onChange={setTitle} placeholder="A short, honest title" />
+            </AcctField>
+            <AcctField label="Category">
+              <AcctInput value={category} onChange={setCategory} placeholder="My story" />
+            </AcctField>
+            <div className="sm:col-span-2">
+              <AcctField label="Your story" hint="At least 40 characters">
+                <AcctTextArea rows={9} value={story} onChange={setStory} placeholder="Write what happened, what you learned, or what you wish someone had told you." />
+              </AcctField>
+            </div>
+          </div>
+
+          <fieldset className="mt-5">
+            <legend className="font-display text-[0.75rem] font-bold tracking-[0.08em] text-charcoal/65 uppercase">How should we credit it?</legend>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button type="button" onClick={() => setIdentity("anonymous")} aria-pressed={identity === "anonymous"} className={cn("rounded-full px-3.5 py-2 font-display text-[0.8rem] font-semibold", identity === "anonymous" ? "bg-navy text-white" : "border border-mist text-charcoal/65 hover:border-navy/30")}>
+                Share anonymously
+              </button>
+              <button type="button" onClick={() => setIdentity("firstName")} aria-pressed={identity === "firstName"} className={cn("rounded-full px-3.5 py-2 font-display text-[0.8rem] font-semibold", identity === "firstName" ? "bg-navy text-white" : "border border-mist text-charcoal/65 hover:border-navy/30")}>
+                Use my first name
+              </button>
+            </div>
+          </fieldset>
+
+          <label className="mt-5 flex items-start gap-2.5 text-[0.82rem] leading-relaxed text-charcoal/70">
+            <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-0.5 h-4 w-4 rounded border-mist text-navy" />
+            <span>
+              I understand that Beyond Now will review this privately first. I give permission for an edited, safeguarding-checked version to be shared using the name option I selected.
+            </span>
+          </label>
+
+          {notice && (
+            <div className="mt-4">
+              <Notice tone={notice.tone}>{notice.msg}</Notice>
+              {notice.tone === "info" && (
+                <button
+                  type="button"
+                  onClick={() => void flushQueue(false)}
+                  disabled={flushing}
+                  className="mt-2 font-display text-[0.8rem] font-semibold text-navy hover:underline disabled:opacity-50"
+                >
+                  {flushing ? "Retrying…" : "Retry now"}
+                </button>
+              )}
+            </div>
+          )}
+
+          <div
+            className="mt-5"
+            title={
+              !title.trim() || story.trim().length < 40 || !consent
+                ? "Add a title, at least 40 characters of story, and tick the permission box to submit."
+                : undefined
+            }
+          >
+            <AcctBtn
+              type="submit"
+              variant="primary"
+              size="lg"
+              disabled={busy || !title.trim() || story.trim().length < 40 || !consent}
+            >
+              {busy ? "Sending…" : "Submit my story"}
+            </AcctBtn>
+          </div>
+        </form>
+
+        <section className="rounded-2xl border border-mist bg-white p-5 sm:p-6">
+          <h2 className="font-display text-[1.05rem] font-bold text-navy">What happens next</h2>
+          <ol className="mt-4 space-y-3 text-[0.88rem] leading-relaxed text-charcoal/70">
+            <li><strong className="text-navy">1. Private review.</strong> Only you and the Beyond Now team can see the submission.</li>
+            <li><strong className="text-navy">2. Safeguarding check.</strong> We may edit details to protect you and others.</li>
+            <li><strong className="text-navy">3. Your update.</strong> You receive a notification when it is reviewed or shared.</li>
+          </ol>
+          <p className="mt-5 rounded-xl border border-sun/30 bg-sun/10 p-4 text-[0.8rem] leading-relaxed text-navy-deep/80">
+            Do not include full names, addresses, school names, phone numbers or anything that could identify someone else.
+          </p>
+        </section>
+      </div>
+
+      {listError && submissions.length === 0 && queued.length === 0 && (
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-sun/30 bg-sun/10 px-5 py-4">
+          <p className="text-[0.85rem] text-charcoal/70">{listError}</p>
+          <button
+            type="button"
+            onClick={() => void flushQueue(false)}
+            disabled={flushing}
+            className="font-display text-[0.8rem] font-semibold text-navy hover:underline disabled:opacity-50"
+          >
+            {flushing ? "Retrying…" : "Retry"}
+          </button>
+        </div>
+      )}
+
+      {queued.length > 0 && (
+        <section className="mt-6 rounded-2xl border border-sun/30 bg-sun/10 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="font-display text-[1.05rem] font-bold text-navy">Waiting to send ({queued.length})</h2>
+            <button
+              type="button"
+              onClick={() => void flushQueue(false)}
+              disabled={flushing}
+              className="font-display text-[0.8rem] font-semibold text-navy hover:underline disabled:opacity-50"
+            >
+              {flushing ? "Retrying…" : "Retry now"}
+            </button>
+          </div>
+          <p className="mt-1.5 text-[0.85rem] text-charcoal/65">
+            Saved safely on this device. They send automatically once the connection is restored.
+          </p>
+          <ul className="mt-4 space-y-3">
+            {queued.map((item) => (
+              <li key={item.queuedAt} className="rounded-xl border border-sun/30 bg-white p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-display text-[0.95rem] font-bold text-navy">{item.title}</p>
+                    <p className="text-[0.75rem] text-charcoal/55">
+                      {item.category} · saved {relativeTime(item.queuedAt)} · tried {item.attempts} {item.attempts === 1 ? "time" : "times"}
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-sun/20 px-2.5 py-1 font-display text-[0.66rem] font-bold tracking-[0.08em] text-[#8a6500] uppercase">
+                    Waiting to send
+                  </span>
+                </div>
+                <div className="mt-3 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      removeQueuedStory(authedUser!.uid, item.queuedAt);
+                      refreshQueue();
+                    }}
+                    className="font-display text-[0.78rem] font-semibold text-red-600 hover:underline"
+                  >
+                    Discard
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <section className="mt-6 rounded-2xl border border-mist bg-white p-5">
+        <h2 className="font-display text-[1.05rem] font-bold text-navy">Your submissions</h2>
+        {submissions.length === 0 && queued.length === 0 ? (
+          <p className="mt-3 text-[0.88rem] text-charcoal/60">You have not submitted a story yet.</p>
+        ) : submissions.length === 0 ? (
+          <p className="mt-3 text-[0.88rem] text-charcoal/60">No sent submissions yet — see the waiting list above.</p>
+        ) : (
+          <ul className="mt-4 space-y-3">
+            {submissions.map((submission) => (
+              <li key={submission.id} className="rounded-xl border border-mist bg-bone/40 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-display text-[0.95rem] font-bold text-navy">{submission.title}</p>
+                    <p className="text-[0.75rem] text-charcoal/55">{submission.category} · submitted {relativeTime(submission.submittedAt)}</p>
+                  </div>
+                  <span className={cn("rounded-full px-2.5 py-1 font-display text-[0.66rem] font-bold tracking-[0.08em] uppercase", submission.status === "published" ? "bg-teal/15 text-teal-ink" : submission.status === "declined" ? "bg-red-100 text-red-700" : "bg-sun/20 text-[#8a6500]")}>
+                    {label[submission.status]}
+                  </span>
+                </div>
+                {submission.adminNote && <p className="mt-3 border-t border-mist pt-3 text-[0.85rem] text-charcoal/70">{submission.adminNote}</p>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }
@@ -521,6 +955,10 @@ export function ProgressPage() {
     </div>
   );
 }
+
+/* ----------------------------- Privacy & Data ----------------------------- */
+
+export { PrivacyPage } from "@/account/PrivacyPage";
 
 /* ------------------------------ Notifications ----------------------------- */
 
@@ -571,8 +1009,17 @@ export function NotificationsPage() {
 
 /* -------------------------------- Settings -------------------------------- */
 
+function useInstallPrompt() {
+  const [state, setState] = useState({ available: false, installed: false });
+  useEffect(() => onInstallPromptChange((next) => setState({ available: next.available, installed: next.installed })), []);
+  return [state] as const;
+}
+
 export function SettingsPage() {
   const { authedUser, profile } = useUserStore();
+  const [display, setDisplayPreference] = useDisplayPreferences();
+  const [installState] = useInstallPrompt();
+  const installed = installState.installed;
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -639,10 +1086,52 @@ export function SettingsPage() {
             <div><dt className="inline font-semibold text-charcoal/85">Account status: </dt><dd className="inline">{profile?.status ?? "active"}</dd></div>
           </dl>
         </section>
+
+        <section className="rounded-2xl border border-mist bg-white p-5 lg:col-span-2">
+          <h2 className="font-display text-[1rem] font-bold text-navy">Accessibility & data usage</h2>
+          <p className="mt-1 text-[0.82rem] text-charcoal/55">
+            Saved on this device only. Turn these on if the site feels heavy, hard to read, or distracting.
+          </p>
+          <div className="mt-4 space-y-3">
+            <Toggle
+              checked={display.lowData}
+              onChange={(v) => setDisplayPreference("lowData", v)}
+              label="Low-data mode — lighter layout, no decorative effects"
+            />
+            <Toggle
+              checked={display.largerText}
+              onChange={(v) => setDisplayPreference("largerText", v)}
+              label="Larger text"
+            />
+            <Toggle
+              checked={display.highContrast}
+              onChange={(v) => setDisplayPreference("highContrast", v)}
+              label="Higher contrast"
+            />
+            <Toggle
+              checked={display.reducedMotion}
+              onChange={(v) => setDisplayPreference("reducedMotion", v)}
+              label="Reduce motion"
+            />
+          </div>
+          {installed && (
+            <div className="mt-5 border-t border-mist pt-4">
+              <p className="text-[0.85rem] text-charcoal/70">
+                Beyond Now is installed on this device. You already have the app.
+              </p>
+            </div>
+          )}
+        </section>
       </div>
-      <p className="mt-5 rounded-2xl border border-mist bg-bone/40 p-4 text-[0.78rem] text-charcoal/60">
-        To delete your account or raise a safeguarding concern, message the team from <a href="#/account/messages" className="font-semibold text-navy underline-offset-4 hover:underline">Messages</a>.
-      </p>
+      <div className="mt-5 space-y-3">
+        <div className="rounded-2xl border border-mist bg-bone/40 p-4 text-[0.8rem] text-charcoal/65">
+          To download a copy of your data or delete your account, go to{" "}
+          <a href="#/account/privacy" className="font-semibold text-navy underline-offset-4 hover:underline">Privacy &amp; Data</a>.
+        </div>
+        <p className="rounded-2xl border border-mist bg-bone/40 p-4 text-[0.78rem] text-charcoal/60">
+          To raise a safeguarding concern, message the team from <a href="#/account/messages" className="font-semibold text-navy underline-offset-4 hover:underline">Messages</a>.
+        </p>
+      </div>
     </div>
   );
 }

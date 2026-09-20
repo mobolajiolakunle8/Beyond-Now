@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Beyond Now">
+  <rect width="64" height="64" fill="#0B2D5B"/>
+  <path d="M14 44A18 18 0 1 1 50 44" fill="none" stroke="#FFC107" stroke-width="4" stroke-linecap="round"/>
+  <path d="M20 44a12 12 0 0 1 24 0Z" fill="#FFC107"/>
+  <path d="M8 44h48" stroke="#00B894" stroke-width="4" stroke-linecap="round"/>
+</svg>

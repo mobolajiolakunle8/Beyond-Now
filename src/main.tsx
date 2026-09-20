@@ -1,5 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { initAppCheck } from "@/lib/appCheck";
+import { registerServiceWorker } from "@/lib/pwa";
 import "./index.css";
 import App from "./App";
 
@@ -35,3 +37,8 @@ if (container) {
 
 // Safety net in case React never mounts (e.g. an early throw).
 window.setTimeout(dismissBootPlaceholder, 6000);
+
+// Security and platform integrations. Both are fire-and-forget: neither may
+// delay or block the first paint, and neither may break rendering on failure.
+void initAppCheck();
+registerServiceWorker();

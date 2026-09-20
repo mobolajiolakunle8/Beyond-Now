@@ -192,7 +192,7 @@ function cleanText(text: string): string {
   return trimmed;
 }
 
-export async function sendUserMessage(info: ParticipantInfo, text: string): Promise<void> {
+export async function sendUserMessage(info: ParticipantInfo, text: string): Promise<string> {
   const fb = getFirebase();
   if (!fb) throw new Error("Firebase is not configured.");
   const user = fb.auth.currentUser;
@@ -245,6 +245,7 @@ export async function sendUserMessage(info: ParticipantInfo, text: string): Prom
   await set(ref(fb.rtdb, `threads/${user.uid}/messages/${msgKey}`), message);
   await update(ref(fb.rtdb, `threads/${user.uid}/meta`), threadMeta);
   await update(ref(fb.rtdb, `users/${user.uid}`), { lastSeenAt: now }).catch(() => undefined);
+  return msgKey;
 }
 
 export async function sendAdminMessage(

@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { ACCEPT_ATTR, MEDIA_PREFIX, formatBytes, formatDate, resolveMedia } from "@/lib/media";
+import { ACCEPT_ATTR, MEDIA_PREFIX, compressionLabel, formatBytes, formatDate, resolveMedia, type ImageProcessOptions } from "@/lib/media";
 import { useStore } from "@/lib/store";
 import type { Status } from "@/lib/content";
 import { cn } from "@/utils/cn";
@@ -511,28 +511,68 @@ export function ImagePicker({
   onChange,
   hint,
   aspect = "aspect-[16/10]",
+  dimensions = "Flexible — auto-compressed to 1600 px maximum edge",
+  uploadOptions,
 }: {
   label: string;
   value: string;
   onChange: (url: string) => void;
   hint?: string;
   aspect?: string;
+  /** Recommended final display dimensions shown to the administrator. */
+  dimensions?: string;
+  /** Controls logo/icon compression while keeping every upload local. */
+  uploadOptions?: ImageProcessOptions;
 }) {
   const { media, uploadMedia } = useStore();
   const img = useImg();
   const [browsing, setBrowsing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<number | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const id = useId();
   const preview = img(value);
+  const selected = media.find((item) => value === `${MEDIA_PREFIX}${item.id}` || value === item.dataUrl);
 
   const handleFiles = async (files: FileList | null) => {
-    if (!files?.length) return;
+    if (!files?.length || busy) return;
+    const file = files[0];
+    const controller = new AbortController();
+    abortRef.current = controller;
     setBusy(true);
-    const added = await uploadMedia(files);
-    setBusy(false);
-    if (added[0]) onChange(`${MEDIA_PREFIX}${added[0].id}`);
+    setError(null);
+    setFileName(file.name);
+    setProgress(10);
+    try {
+      const added = await uploadMedia(
+        [file],
+        uploadOptions,
+        {
+          signal: controller.signal,
+          onProgress: (p) => setProgress(p.percent),
+        },
+      );
+      if (added[0]) {
+        onChange(`${MEDIA_PREFIX}${added[0].id}`);
+      } else if (!controller.signal.aborted) {
+        setError("Upload did not complete. Please try again.");
+      }
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        setError(err instanceof Error ? err.message : "Upload failed. Please try again.");
+      }
+    } finally {
+      abortRef.current = null;
+      setBusy(false);
+      setProgress(null);
+      setFileName(null);
+    }
   };
+
+  const cancel = () => abortRef.current?.abort();
 
   return (
     <div>
@@ -540,7 +580,7 @@ export function ImagePicker({
         <span className="font-display text-[0.75rem] font-bold tracking-[0.06em] text-charcoal/70 uppercase">
           {label}
         </span>
-        {hint && <span className="text-[0.7rem] text-charcoal/45">{hint}</span>}
+        <span className="text-right text-[0.7rem] text-charcoal/45">{hint ?? dimensions}</span>
       </span>
 
       <div className="overflow-hidden rounded-xl border border-mist bg-bone">
@@ -565,15 +605,47 @@ export function ImagePicker({
             }}
           />
           <AdminBtn size="sm" variant="primary" onClick={() => inputRef.current?.click()} disabled={busy}>
-            {busy ? "Uploading…" : "Upload from device"}
+            {busy ? `Uploading… ${progress ?? 0}%` : "Upload from device"}
           </AdminBtn>
-          <AdminBtn size="sm" variant="outline" onClick={() => setBrowsing(true)}>
+          {busy && (
+            <AdminBtn size="sm" variant="ghost" className="text-red-600" onClick={cancel}>
+              Cancel
+            </AdminBtn>
+          )}
+          <AdminBtn size="sm" variant="outline" onClick={() => setBrowsing(true)} disabled={busy}>
             Media library ({media.length})
           </AdminBtn>
-          {value && (
+          {value && !busy && (
             <AdminBtn size="sm" variant="ghost" onClick={() => onChange("")}>
               Clear
             </AdminBtn>
+          )}
+        </div>
+        {busy && progress !== null && (
+          <div className="border-t border-mist bg-white px-3 pt-2 pb-1">
+            <div className="h-1.5 overflow-hidden rounded-full bg-mist" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} aria-label={`Uploading ${fileName ?? "image"}`}>
+              <div className="h-full rounded-full bg-teal transition-all duration-200" style={{ width: `${progress}%` }} />
+            </div>
+            <p className="py-1 text-[0.7rem] text-charcoal/55">
+              Uploading{fileName ? ` ${fileName}` : ""}… {progress}% — compressing, sending and saving. You can cancel safely; nothing is published until it finishes.
+            </p>
+          </div>
+        )}
+        {error && !busy && (
+          <div className="flex items-start justify-between gap-2 border-t border-red-200 bg-red-50 px-3 py-2">
+            <p role="alert" className="text-[0.75rem] leading-snug text-red-700">{error}</p>
+            <button type="button" onClick={() => inputRef.current?.click()} className="shrink-0 font-display text-[0.72rem] font-semibold text-navy hover:underline">
+              Retry
+            </button>
+          </div>
+        )}
+        <div className="border-t border-mist bg-white/75 px-3 py-2 text-[0.7rem] leading-relaxed text-charcoal/55">
+          <span className="font-semibold text-charcoal/70">Recommended:</span> {dimensions}. JPG, PNG and WebP uploads are resized and auto-compressed before storage.
+          {selected && (
+            <span className="ml-1">
+              Stored: {selected.width} × {selected.height} px · {formatBytes(selected.size)}
+              {selected.originalSize ? ` · ${compressionLabel(selected.originalSize, selected.size)}` : ""}.
+            </span>
           )}
         </div>
       </div>
@@ -581,6 +653,8 @@ export function ImagePicker({
       <MediaBrowser
         open={browsing}
         onClose={() => setBrowsing(false)}
+        dimensions={dimensions}
+        uploadOptions={uploadOptions}
         onSelect={(url) => {
           onChange(url);
           setBrowsing(false);
@@ -594,16 +668,53 @@ export function MediaBrowser({
   open,
   onClose,
   onSelect,
+  dimensions,
+  uploadOptions,
 }: {
   open: boolean;
   onClose: () => void;
   onSelect: (url: string) => void;
+  dimensions?: string;
+  uploadOptions?: ImageProcessOptions;
 }) {
-  const { media, uploadMedia } = useStore();
+  const { media, uploadMedia, notify } = useStore();
   const [query, setQuery] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState<number | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const results = media.filter((m) => m.name.toLowerCase().includes(query.trim().toLowerCase()));
+
+  const handleNewFiles = async (files: FileList | null) => {
+    if (!files?.length || uploading) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setUploading(true);
+    setUploadError(null);
+    setProgress(10);
+    try {
+      await uploadMedia(
+        Array.from(files),
+        uploadOptions,
+        {
+          signal: controller.signal,
+          onProgress: (p) => setProgress(p.percent),
+        },
+      );
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        const message = err instanceof Error ? err.message : "Upload failed. Please try again.";
+        setUploadError(message);
+        notify("error", message);
+      }
+    } finally {
+      abortRef.current = null;
+      setUploading(false);
+      setProgress(null);
+    }
+  };
 
   return (
     <Modal open={open} onClose={onClose} title="Choose an image" wide stacked>
@@ -616,14 +727,45 @@ export function MediaBrowser({
           multiple
           className="hidden"
           onChange={(e) => {
-            void uploadMedia(e.target.files ?? []);
+            void handleNewFiles(e.target.files);
             e.target.value = "";
           }}
         />
-        <AdminBtn variant="primary" size="sm" onClick={() => inputRef.current?.click()}>
-          Upload new
-        </AdminBtn>
+        <div className="flex gap-2">
+          {uploading && (
+            <AdminBtn variant="ghost" size="sm" className="text-red-600" onClick={() => abortRef.current?.abort()}>
+              Cancel
+            </AdminBtn>
+          )}
+          <AdminBtn variant="primary" size="sm" onClick={() => inputRef.current?.click()} disabled={uploading}>
+            {uploading ? `Uploading… ${progress ?? 0}%` : "Upload new"}
+          </AdminBtn>
+        </div>
       </div>
+
+      {uploading && progress !== null && (
+        <div className="mb-4 rounded-xl border border-mist bg-bone/60 px-4 py-3">
+          <div className="h-1.5 overflow-hidden rounded-full bg-mist" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} aria-label="Uploading images">
+            <div className="h-full rounded-full bg-teal transition-all duration-200" style={{ width: `${progress}%` }} />
+          </div>
+          <p className="mt-1.5 text-[0.75rem] text-charcoal/60">Uploading… {progress}%. Large photos compress first, so the first seconds may sit at a low number.</p>
+        </div>
+      )}
+
+      {uploadError && !uploading && (
+        <div className="mb-4 flex items-start justify-between gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+          <p role="alert" className="text-[0.8rem] leading-snug text-red-700">{uploadError}</p>
+          <button type="button" onClick={() => inputRef.current?.click()} className="shrink-0 font-display text-[0.75rem] font-semibold text-navy hover:underline">
+            Retry
+          </button>
+        </div>
+      )}
+
+      {dimensions && (
+        <p className="-mt-1 mb-4 text-[0.75rem] text-charcoal/55">
+          Recommended for this placement: <span className="font-semibold text-charcoal/75">{dimensions}</span>. Uploads are resized and auto-compressed.
+        </p>
+      )}
 
       {results.length === 0 ? (
         <EmptyState
