@@ -1,16 +1,15 @@
 import { useState } from "react";
 import { AdminBtn, Field, TextInput } from "@/admin/ui";
 import { LogoMark } from "@/components/Logo";
-import { ADMIN_EMAIL, isFirebaseConfigured } from "@/lib/firebase";
+import { isFirebaseConfigured } from "@/lib/firebase";
 import { useStore } from "@/lib/store";
 
 export function Login() {
-  const { login, cloudEnabled, syncStatus } = useStore();
+  const { login, syncStatus } = useStore();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [showHint, setShowHint] = useState(false);
   const firebaseReady = isFirebaseConfigured();
 
   const submit = async (e: React.FormEvent) => {
@@ -96,7 +95,7 @@ export function Login() {
                 type="email"
                 value={email}
                 onChange={setEmail}
-                placeholder={ADMIN_EMAIL}
+                placeholder="you@example.com"
                 invalid={Boolean(error)}
               />
             </Field>
@@ -123,57 +122,6 @@ export function Login() {
               {busy ? "Verifying…" : "Sign in to dashboard"}
             </AdminBtn>
           </form>
-
-          <div className="mt-6 rounded-xl border border-mist bg-white p-4">
-            <button
-              type="button"
-              onClick={() => setShowHint((v) => !v)}
-              className="flex w-full items-center justify-between gap-2 font-display text-[0.8rem] font-semibold text-navy"
-            >
-              {cloudEnabled ? "How to create the first admin" : "Local development credentials"}
-              <span className={showHint ? "rotate-180" : ""}>▾</span>
-            </button>
-            {showHint && (
-              <div className="mt-3 space-y-2 border-t border-mist pt-3 text-[0.82rem] leading-relaxed text-charcoal/70">
-                {cloudEnabled ? (
-                  <>
-                    <p>
-                      1. Open the Firebase console → <strong>Authentication</strong> → <strong>Sign-in method</strong>{" "}
-                      and enable <strong>Email/Password</strong>.
-                    </p>
-                    <p>
-                      2. Under <strong>Users</strong>, add{" "}
-                      <code className="rounded bg-bone px-1.5 py-0.5 font-semibold text-navy">{ADMIN_EMAIL}</code>{" "}
-                      with a strong password.
-                    </p>
-                    <p>
-                      3. Publish the security rules (
-                      <code className="rounded bg-bone px-1 py-0.5">database.rules.json</code> +{" "}
-                      <code className="rounded bg-bone px-1 py-0.5">storage.rules</code>) with{" "}
-                      <code className="rounded bg-bone px-1 py-0.5">npm run deploy:rules</code>.
-                    </p>
-                    <p className="text-[0.75rem] text-charcoal/55">
-                      After the first sign-in you can change the password from Admin Account.
-                    </p>
-                  </>
-                ) : (
-                  <>
-                    <p>
-                      Email:{" "}
-                      <code className="rounded bg-bone px-1.5 py-0.5 font-semibold text-navy">{ADMIN_EMAIL}</code>
-                    </p>
-                    <p>
-                      Password: any password with <strong>8+ characters</strong> (local mode only).
-                    </p>
-                    <p className="text-[0.75rem] text-charcoal/55">
-                      Copy <code className="rounded bg-bone px-1 py-0.5">.env.example</code> to{" "}
-                      <code className="rounded bg-bone px-1 py-0.5">.env</code> to enable Firebase cloud sync.
-                    </p>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
 
           <a
             href="#home"

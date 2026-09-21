@@ -44,9 +44,11 @@ export function onInstallPromptChange(listener: (state: InstallPromptState) => v
 
 export function isAppInstalled(): boolean {
   if (typeof window === "undefined") return true;
-  const standalone = window.matchMedia("(display-mode: standalone)").matches;
+  const standalone =
+    typeof window.matchMedia === "function" && window.matchMedia("(display-mode: standalone)").matches;
   // iOS Safari exposes standalone on Navigator but TypeScript does not model it.
-  const iosStandalone = "standalone" in window.navigator && Boolean((window.navigator as { standalone?: unknown }).standalone);
+  const iosStandalone =
+    "standalone" in window.navigator && Boolean((window.navigator as { standalone?: unknown }).standalone);
   return standalone || iosStandalone;
 }
 

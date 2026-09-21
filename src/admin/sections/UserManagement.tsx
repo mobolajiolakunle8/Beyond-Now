@@ -503,7 +503,6 @@ const CASE_LABELS: Record<SafeguardingCase["status"], string> = {
   escalated: "Escalated",
   resolved: "Resolved",
 };
-void CASE_LABELS;
 
 /**
  * Safeguarding queue. Shows automatically-screened conversations that a

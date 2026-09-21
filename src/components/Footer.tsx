@@ -71,9 +71,6 @@ export function Footer() {
                 {social.label}
               </a>
             ))}
-            <a href="#/admin" className="rounded-full border border-white/15 px-3 py-1 transition-colors hover:border-sun hover:text-sun">
-              Admin
-            </a>
           </div>
         </div>
       </Wrap>

@@ -50,12 +50,6 @@ export const ADMIN_NAME =
   (import.meta.env.VITE_ADMIN_NAME as string | undefined)?.trim() || "Master Administrator";
 
 let cached: FirebaseServices | null | undefined;
-let initError: string | null = null;
-let analyticsPromise: Promise<Analytics | null> | null = null;
-
-export function firebaseInitError(): string | null {
-  return initError;
-}
 
 /**
  * Initializes the Firebase app and core services (Auth, Realtime Database, Storage).
@@ -86,27 +80,18 @@ export function getFirebase(): FirebaseServices | null {
       storage: getStorage(app),
       analytics: null,
     };
-    initError = null;
 
+    // Analytics init — silently attached; no public accessor.
     if (typeof window !== "undefined" && config.measurementId && app) {
-      analyticsPromise = analyticsSupported()
+      analyticsSupported()
         .then((ok) => (ok ? getAnalytics(app) : null))
-        .then((analytics) => {
-          if (cached) cached.analytics = analytics;
-          return analytics;
-        })
+        .then((a) => { if (cached) cached.analytics = a; })
         .catch(() => null);
     }
   } catch (err) {
-    initError = err instanceof Error ? err.message : "Firebase could not start.";
     cached = null;
   }
   return cached;
-}
-
-export function getAnalyticsInstance(): Promise<Analytics | null> {
-  getFirebase();
-  return analyticsPromise ?? Promise.resolve(null);
 }
 
 /** Friendly mapping of Firebase Auth error codes for the login screen. */
@@ -157,6 +142,7 @@ export function databaseErrorMessage(err: unknown): string {
  * rules not yet published) — the cases where retrying later can succeed.
  * Validation and auth errors return false so they always surface immediately.
  */
+/** Returns true when a realtime-error code indicates a network/rule setup issue. */
 export function isSyncFailure(err: unknown): boolean {
   const code =
     err && typeof err === "object" && "code" in err ? String((err as { code: string }).code) : "";

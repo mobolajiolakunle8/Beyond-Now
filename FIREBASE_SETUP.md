@@ -56,6 +56,20 @@ firebase login
 firebase use default        # → beyond-now-14935 (from .firebaserc)
 ```
 
+### Hidden admin access
+
+The admin dashboard is **not linked** from the public site. Open it with the
+access code in the URL:
+
+```
+https://your-domain/#/admin?k=BN-2026
+```
+
+The code is set with `VITE_ADMIN_ACCESS_CODE` (see `.env`). Entering the correct
+code unlocks the panel for that browser session; Firebase Authentication then
+still gates who can actually sign in. To rotate the code, change the env value
+and redeploy.
+
 ---
 
 ## 4. Deploy

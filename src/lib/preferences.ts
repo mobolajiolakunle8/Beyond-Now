@@ -22,7 +22,9 @@ export type DisplayPreferences = {
 const STORAGE_KEY = "bn.display.v1";
 
 const prefersReducedMotion = () =>
-  typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  typeof window !== "undefined" &&
+  typeof window.matchMedia === "function" &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 function detectLowData(): boolean {
   if (typeof navigator === "undefined") return false;

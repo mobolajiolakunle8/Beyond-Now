@@ -10,6 +10,7 @@ interface ImportMetaEnv {
   readonly VITE_FIREBASE_MEASUREMENT_ID?: string;
   readonly VITE_ADMIN_EMAIL?: string;
   readonly VITE_ADMIN_NAME?: string;
+  readonly VITE_ADMIN_ACCESS_CODE?: string;
 }
 
 interface ImportMeta {
